@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loudreader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    #reader { font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }
+    #reader p { font-size: 1.25rem; line-height: 2.0; margin: 0 0 1.1rem; color: #1e293b; }
+    #reader .w { border-radius: 4px; padding: 0 1px; cursor: pointer; transition: background-color .08s linear, color .08s linear; }
+    #reader .w:hover { background: #e2e8f0; }
+    #reader .w.sen { background: #f1f5f9; }
+    #reader .w.on { background: #fde68a; color: #111827; box-shadow: 0 0 0 2px #fde68a; }
+    #bar { box-shadow: 0 -4px 20px rgba(15,23,42,.10); }
+    body { padding-bottom: 150px; }
+    .ctl { width: 2.5rem; height: 2.5rem; border-radius: 9999px; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <header class="bg-white border-b border-slate-200">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+      <a href="/" class="font-semibold">&#128266; Loudreader</a>
+      <div class="flex items-center gap-3 text-sm">
+        <span id="partInfo" class="text-xs text-slate-500"></span>
+        <button id="chapBtn" type="button" class="text-slate-600 underline">Contents</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+    <div class="flex items-baseline justify-between gap-3 mb-1">
+      <h1 id="bookTitle" class="text-xl font-semibold text-slate-900 truncate">Loading&hellip;</h1>
+      <span id="bookMeta" class="text-xs text-slate-500 shrink-0"></span>
+    </div>
+    <div id="chapterLabel" class="text-sm text-slate-500 mb-3"></div>
+    <div id="loadError" class="hidden text-red-700 text-sm mb-3"></div>
+    <div id="voiceWarn" class="hidden bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg p-3 mb-3"></div>
+    <article id="reader" class="bg-white border border-slate-200 rounded-lg p-6 sm:p-8"></article>
+  </main>
+
+  <div id="chap" class="fixed inset-0 z-30 hidden">
+    <div class="absolute inset-0 bg-slate-900/40" data-chapclose></div>
+    <div class="absolute right-0 top-0 bottom-0 w-96 max-w-full bg-white shadow-xl overflow-y-auto">
+      <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+        <span class="font-medium">Contents</span>
+        <button type="button" data-chapclose class="text-slate-500 hover:text-slate-900">&#10005;</button>
+      </div>
+      <div id="chapList" class="p-2 text-sm"></div>
+    </div>
+  </div>
+
+  <div id="bar" class="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 z-20 hidden">
+    <div id="gwrap" class="h-2 bg-slate-200 cursor-pointer" title="Jump anywhere in the book">
+      <div id="gbar" class="h-2 bg-amber-500" style="width:0%"></div>
+    </div>
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-3">
+      <div class="flex items-center gap-2 text-xs text-slate-500 mb-2">
+        <span id="cur" class="tabular-nums">0%</span>
+        <input id="seek" type="range" min="0" max="1000" value="0" class="flex-1 accent-slate-900">
+        <span id="dur" class="tabular-nums"></span>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <div id="barCover" class="w-10 h-14 rounded overflow-hidden bg-slate-200 hidden sm:block shrink-0"></div>
+        <div class="min-w-0 flex-1">
+          <div id="barTitle" class="text-sm font-medium text-slate-900 truncate"></div>
+          <div id="barSub" class="text-xs text-slate-500 truncate"></div>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button id="prevPart" type="button" class="ctl text-slate-600 hover:bg-slate-100" title="Previous part">&#9198;</button>
+          <button id="prevSen" type="button" class="ctl border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-medium" title="Previous sentence">&#8249;s</button>
+          <button id="playBtn" type="button" class="w-12 h-12 rounded-full bg-slate-900 text-white flex items-center justify-center hover:bg-slate-800" aria-label="Play or pause">
+            <span id="playIcon" class="text-xl leading-none">&#9654;</span>
+          </button>
+          <button id="nextSen" type="button" class="ctl border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-medium" title="Next sentence">s&#8250;</button>
+          <button id="nextPart" type="button" class="ctl text-slate-600 hover:bg-slate-100" title="Next part">&#9197;</button>
+        </div>
+        <div class="w-full md:w-auto md:flex-1 min-w-0 flex flex-wrap items-center justify-center md:justify-end gap-2 text-xs">
+          <span id="left" class="text-slate-500 truncate"></span>
+          <select id="voiceSel" class="border border-slate-200 rounded p-1.5 bg-white max-w-[11rem]"></select>
+          <select id="rate" class="border border-slate-200 rounded p-1.5 bg-white">
+            <option value="0.75">0.75&times;</option>
+            <option value="1" selected>1&times;</option>
+            <option value="1.1">1.1&times;</option>
+            <option value="1.25">1.25&times;</option>
+            <option value="1.5">1.5&times;</option>
+            <option value="1.75">1.75&times;</option>
+            <option value="2">2&times;</option>
+            <option value="2.5">2.5&times;</option>
+            <option value="3">3&times;</option>
+            <option value="3.5">3.5&times;</option>
+            <option value="4">4&times;</option>
+          </select>
+          <select id="sleep" class="border border-slate-200 rounded p-1.5 bg-white" title="Sleep timer">
+            <option value="0">Sleep: off</option>
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+            <option value="45">45 min</option>
+            <option value="60">60 min</option>
+            <option value="end">End of part</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // Reader engine. Sentences are spoken as chained utterances (dodges Chrome's
+  // long-utterance cutoff); word boundary events drive the highlight; chainSeq
+  // gates every callback because engines can double-fire end/error events,
+  // which would otherwise fork two interleaved readings.
+  const BOOK_ID = location.pathname.split('/').pop();
+  const $ = (id) => document.getElementById(id);
+  const API = '/api/books/' + BOOK_ID;
+  const RATE_KEY = 'lr:rate';
+  const VOICE_KEY = 'lr:voice';
+  const SPW = 0.42;
+
+  let book = null;
+  let cur = 0;
+  let tokens = [];
+  let spans = [];
+  let sentences = [];
+  let curWord = 0;
+  let curSentence = 0;
+  let speaking = false;
+  let activeIdx = -1;
+  let senMarked = [];
+  let lastSave = 0;
+  let sleepUntil = 0;
+  let sleepAtEnd = false;
+  let errStreak = 0;
+  let voices = [];
+  let nextText = {};
+  let currentUtterance = null;
+  let chainSeq = 0;
+
+  function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+  function fmtDur(sec) {
+    sec = Math.max(0, sec);
+    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    return h ? h + 'h ' + String(m).padStart(2, '0') + 'm' : m + 'm';
+  }
+  function fail(html) { $('bookTitle').textContent = 'Loudreader'; $('loadError').innerHTML = html; $('loadError').classList.remove('hidden'); }
+
+  // ---------------- voices ----------------
+  function rankVoice(v) {
+    const n = v.name.toLowerCase();
+    if (n.includes('natural') || n.includes('neural') || n.includes('online')) return 4;
+    if (n.includes('google')) return 3;
+    if (n.includes('microsoft')) return 2;
+    if (n.includes('espeak') || n.includes('festival') || n.includes('mbrola')) return 0;
+    return 1;
+  }
+  function loadVoices() {
+    if (!window.speechSynthesis) return;
+    voices = speechSynthesis.getVoices();
+    if (!voices.length) return;
+    const saved = localStorage.getItem(VOICE_KEY);
+    const en = voices.filter(v => (v.lang || '').toLowerCase().startsWith('en')).sort((a, b) => rankVoice(b) - rankVoice(a));
+    const rest = voices.filter(v => !(v.lang || '').toLowerCase().startsWith('en')).sort((a, b) => (a.lang || '').localeCompare(b.lang || ''));
+    const sel = $('voiceSel');
+    sel.innerHTML = '';
+    [...en, ...rest].forEach(v => {
+      const o = document.createElement('option');
+      o.value = v.voiceURI;
+      o.textContent = v.name.replace(/^(Microsoft|Google)\s*/, '') + ' (' + v.lang + ')';
+      sel.appendChild(o);
+    });
+    sel.value = (saved && voices.some(v => v.voiceURI === saved)) ? saved : (en[0] || voices[0]).voiceURI;
+  }
+  function pickVoice() {
+    const uri = $('voiceSel').value;
+    return voices.find(v => v.voiceURI === uri) || null;
+  }
+  if (window.speechSynthesis) {
+    loadVoices();
+    speechSynthesis.addEventListener('voiceschanged', loadVoices);
+  }
+
+  // ---------------- boot ----------------
+  (async function init() {
+    if (!window.speechSynthesis) {
+      $('voiceWarn').textContent = 'This browser has no speech support. Try Chrome, Edge, Safari or Firefox.';
+      $('voiceWarn').classList.remove('hidden');
+    }
+    let r;
+    try { r = await fetch(API); } catch (e) { return fail('Could not load this book.'); }
+    if (r.status === 404) return fail('This book is not in your library. <a class="underline" href="/">Back to the library</a>.');
+    if (!r.ok) return fail('Could not load this book (HTTP ' + r.status + ').');
+    book = await r.json();
+
+    document.title = (book.title || 'Loudreader') + ' | Loudreader';
+    $('bookTitle').textContent = book.title || 'Book';
+    $('bookMeta').textContent = [book.author, (book.total_words || 0).toLocaleString() + ' words',
+      '~' + fmtDur((book.total_words || 0) * SPW)].filter(Boolean).join(' · ');
+    $('barTitle').textContent = book.title || '';
+    if (book.cover_url) $('barCover').innerHTML = '<img src="' + esc(book.cover_url) + '" class="w-full h-full object-cover" alt="">';
+    buildContents();
+    $('bar').classList.remove('hidden');
+
+    const rate = parseFloat(localStorage.getItem(RATE_KEY) || '1') || 1;
+    $('rate').value = String(rate);
+
+    cur = Math.min(Math.max(0, book.cur_chunk || 0), Math.max(0, book.total_chunks - 1));
+    await loadChunk(cur, { word: book.cur_word || 0, autoplay: false, save: false });
+  })();
+
+  function chunkMeta(i) { return (book.chunks || [])[i] || { words: 0, words_start: 0, chapter: null }; }
+  function updatePartUI() {
+    const m = chunkMeta(cur);
+    $('partInfo').textContent = 'Part ' + (cur + 1) + ' of ' + book.total_chunks;
+    $('chapterLabel').textContent = m.chapter || '';
+    $('barSub').textContent = [m.chapter, 'Part ' + (cur + 1) + '/' + book.total_chunks].filter(Boolean).join(' · ');
+  }
+
+  // ---------------- chunk text -> tokens, sentences, spans ----------------
+  function buildChunk(text) {
+    tokens = []; sentences = []; senMarked = []; activeIdx = -1;
+    let html = '';
+    (text || '').split(/\n\n+/).forEach(para => {
+      const ptoks = para.split(/\s+/).filter(Boolean);
+      if (!ptoks.length) return;
+      html += '<p>';
+      let sTokens = [], sStart = tokens.length;
+      ptoks.forEach(t => {
+        const i = tokens.length;
+        tokens.push(t);
+        html += '<span class="w" data-i="' + i + '">' + esc(t) + '</span> ';
+        sTokens.push(t);
+        if (/[.!?…]["'”’)\]]?$/.test(t) && sTokens.length >= 2) {
+          sentences.push({ startWord: sStart, tokens: sTokens, text: sTokens.join(' ') });
+          sTokens = []; sStart = tokens.length;
+        }
+      });
+      if (sTokens.length) sentences.push({ startWord: sStart, tokens: sTokens, text: sTokens.join(' ') });
+      html += '</p>';
+    });
+    $('reader').innerHTML = html || '<p>&hellip;</p>';
+    spans = Array.from($('reader').querySelectorAll('.w'));
+    if (!sentences.length && tokens.length) sentences.push({ startWord: 0, tokens: tokens.slice(), text: tokens.join(' ') });
+  }
+  function sentenceOfWord(w) {
+    for (let i = sentences.length - 1; i >= 0; i--) if (sentences[i].startWord <= w) return i;
+    return 0;
+  }
+
+  async function loadChunk(i, opts) {
+    opts = opts || {};
+    if (!book || i < 0 || i >= book.total_chunks) return;
+    stopSpeech();
+    cur = i;
+    updatePartUI();
+    let text = nextText[i];
+    if (text == null) {
+      try { text = (await (await fetch(API + '/chunks/' + i)).json()).text; }
+      catch (e) { $('reader').innerHTML = '<p>Could not load this part.</p>'; return; }
+    }
+    delete nextText[i];
+    buildChunk(text);
+    curWord = Math.min(Math.max(0, opts.word || 0), Math.max(0, tokens.length - 1));
+    curSentence = sentenceOfWord(curWord);
+    setWord(curWord, true);
+    markSentence(curSentence);
+    updateGlobal();
+    if (opts.save !== false) savePos(true);
+    if (opts.autoplay) play();
+    const n = i + 1;
+    if (n < book.total_chunks && nextText[n] == null) {
+      fetch(API + '/chunks/' + n).then(r => r.json()).then(j => { nextText[n] = j.text; }).catch(() => {});
+    }
+  }
+
+  // ---------------- highlight ----------------
+  function setWord(w, scroll) {
+    if (activeIdx >= 0 && spans[activeIdx]) spans[activeIdx].classList.remove('on');
+    activeIdx = w;
+    curWord = w;
+    const el = spans[w];
+    if (!el) return;
+    el.classList.add('on');
+    const rc = el.getBoundingClientRect();
+    if (scroll || rc.top < 110 || rc.bottom > window.innerHeight - 200) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  function markSentence(si) {
+    senMarked.forEach(el => el.classList.remove('sen'));
+    senMarked = [];
+    const s = sentences[si];
+    if (!s) return;
+    for (let w = s.startWord; w < s.startWord + s.tokens.length; w++) {
+      if (spans[w]) { spans[w].classList.add('sen'); senMarked.push(spans[w]); }
+    }
+  }
+
+  // ---------------- speech engine ----------------
+  function speakSentence(si, fromTok, chain, attempt) {
+    if (chain !== chainSeq || !speaking) return;
+    const s = sentences[si];
+    if (!s) { onChunkDone(); return; }
+    curSentence = si;
+    markSentence(si);
+    fromTok = Math.min(Math.max(0, fromTok || 0), s.tokens.length - 1);
+    const toks = s.tokens.slice(fromTok);
+    const text = toks.join(' ');
+    const offs = []; let acc = 0;
+    toks.forEach(t => { offs.push(acc); acc += t.length + 1; });
+
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickVoice();
+    if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = Math.min(4, parseFloat($('rate').value) || 1);
+    let settled = false;
+
+    setWord(s.startWord + fromTok);
+    u.onboundary = (e) => {
+      if (settled || chain !== chainSeq || !e || typeof e.charIndex !== 'number') return;
+      let k = 0;
+      for (let j = offs.length - 1; j >= 0; j--) if (offs[j] <= e.charIndex) { k = j; break; }
+      setWord(s.startWord + fromTok + k);
+      updateGlobal(); savePos(false);
+    };
+    u.onend = () => {
+      if (settled || chain !== chainSeq) return;
+      settled = true;
+      errStreak = 0;
+      if (!speaking) return;
+      if (si + 1 < sentences.length) speakSentence(si + 1, 0, chain);
+      else onChunkDone();
+    };
+    u.onerror = (e) => {
+      if (settled || chain !== chainSeq) return;
+      settled = true;
+      if ((e && (e.error === 'interrupted' || e.error === 'canceled'))) return;
+      if (!attempt && speaking) { setTimeout(() => speakSentence(si, fromTok, chain, 1), 250); return; }
+      errStreak++;
+      if (errStreak >= 3) {
+        pause();
+        $('voiceWarn').textContent = 'Speech keeps failing (' + ((e && e.error) || 'unknown')
+          + '). Try picking a different voice — quality and reliability vary a lot between browsers.';
+        $('voiceWarn').classList.remove('hidden');
+        return;
+      }
+      if (speaking) { if (si + 1 < sentences.length) speakSentence(si + 1, 0, chain); else onChunkDone(); }
+    };
+    currentUtterance = u;
+    speechSynthesis.speak(u);
+  }
+
+  function onChunkDone() {
+    if (sleepAtEnd) { sleepAtEnd = false; $('sleep').value = '0'; pause(); return; }
+    if (cur < book.total_chunks - 1) {
+      savePosData(cur + 1, 0, false, false, 0);
+      loadChunk(cur + 1, { word: 0, autoplay: true, save: false });
+    } else {
+      speaking = false;
+      setPlayIcon(false);
+      savePosData(cur, tokens.length * SPW, true, false, Math.max(0, tokens.length - 1));
+      $('chapterLabel').textContent = 'Finished — nicely done.';
+    }
+  }
+
+  function stopSpeech() {
+    chainSeq++;
+    currentUtterance = null;
+    try { speechSynthesis.cancel(); } catch (e) {}
+  }
+  function play() {
+    if (!window.speechSynthesis || !tokens.length) return;
+    speaking = true;
+    setPlayIcon(true);
+    stopSpeech();
+    const chain = chainSeq;
+    const si = sentenceOfWord(curWord);
+    setTimeout(() => { if (speaking && chain === chainSeq) speakSentence(si, curWord - sentences[si].startWord, chain); }, 60);
+  }
+  function pause() {
+    speaking = false;
+    setPlayIcon(false);
+    stopSpeech();
+    savePos(true);
+  }
+  function setPlayIcon(p) { $('playIcon').innerHTML = p ? '&#10073;&#10073;' : '&#9654;'; }
+  $('playBtn').addEventListener('click', () => { if (speaking) pause(); else play(); });
+
+  // ---------------- navigation ----------------
+  function gotoWord(w, keepPlaying) {
+    w = Math.min(Math.max(0, w), Math.max(0, tokens.length - 1));
+    const wasSpeaking = keepPlaying != null ? keepPlaying : speaking;
+    stopSpeech();
+    speaking = false;
+    setWord(w, true);
+    markSentence(sentenceOfWord(w));
+    savePos(true);
+    updateGlobal();
+    if (wasSpeaking) play();
+  }
+  $('prevSen').addEventListener('click', () => {
+    const si = sentenceOfWord(curWord);
+    const target = (curWord > sentences[si].startWord + 1 || si === 0) ? si : si - 1;
+    gotoWord(sentences[Math.max(0, target)].startWord);
+  });
+  $('nextSen').addEventListener('click', () => {
+    const si = sentenceOfWord(curWord);
+    if (si + 1 < sentences.length) gotoWord(sentences[si + 1].startWord);
+    else if (cur < book.total_chunks - 1) loadChunk(cur + 1, { word: 0, autoplay: speaking });
+  });
+  $('prevPart').addEventListener('click', () => { if (cur > 0) loadChunk(cur - 1, { word: 0, autoplay: speaking }); });
+  $('nextPart').addEventListener('click', () => { if (cur < book.total_chunks - 1) loadChunk(cur + 1, { word: 0, autoplay: speaking }); });
+  $('seek').addEventListener('input', () => {
+    const w = Math.round((+$('seek').value) / 1000 * Math.max(0, tokens.length - 1));
+    gotoWord(w, false);
+  });
+  $('gwrap').addEventListener('click', (e) => {
+    const rc = $('gwrap').getBoundingClientRect();
+    const pct = Math.min(1, Math.max(0, (e.clientX - rc.left) / rc.width));
+    const target = pct * (book.total_words || 0);
+    let idx = 0;
+    (book.chunks || []).forEach(c => { if (c.words_start <= target) idx = c.idx; });
+    const m = chunkMeta(idx);
+    const w = Math.max(0, Math.round(target - m.words_start));
+    if (idx === cur) gotoWord(w);
+    else loadChunk(idx, { word: w, autoplay: speaking });
+  });
+  $('reader').addEventListener('click', (e) => {
+    const sp = e.target.closest('.w');
+    if (!sp) return;
+    gotoWord(+sp.dataset.i, true);
+  });
+  $('rate').addEventListener('change', () => {
+    localStorage.setItem(RATE_KEY, $('rate').value);
+    if (speaking) play();
+    updateGlobal();
+  });
+  $('voiceSel').addEventListener('change', () => {
+    localStorage.setItem(VOICE_KEY, $('voiceSel').value);
+    $('voiceWarn').classList.add('hidden');
+    errStreak = 0;
+    if (speaking) play();
+  });
+  $('sleep').addEventListener('change', () => {
+    const v = $('sleep').value;
+    sleepUntil = 0; sleepAtEnd = false;
+    if (v === 'end') sleepAtEnd = true;
+    else if (+v > 0) sleepUntil = Date.now() + (+v) * 60000;
+  });
+  document.addEventListener('keydown', (e) => {
+    if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (e.code === 'Space') { e.preventDefault(); $('playBtn').click(); }
+    else if (e.code === 'ArrowLeft') $('prevSen').click();
+    else if (e.code === 'ArrowRight') $('nextSen').click();
+  });
+
+  // ---------------- progress + persistence ----------------
+  function updateGlobal() {
+    if (!book) return;
+    const m = chunkMeta(cur);
+    const total = Math.max(1, book.total_words || 1);
+    const done = (m.words_start || 0) + curWord;
+    $('gbar').style.width = Math.min(100, done / total * 100) + '%';
+    const rate = parseFloat($('rate').value) || 1;
+    let leftTxt = '~' + fmtDur((total - done) * SPW / rate) + ' left';
+    if (sleepUntil) leftTxt += ' · sleep ' + fmtDur((sleepUntil - Date.now()) / 1000);
+    else if (sleepAtEnd) leftTxt += ' · sleep at part end';
+    $('left').textContent = Math.round(done / total * 100) + '% · ' + leftTxt;
+    $('cur').textContent = tokens.length ? Math.round(curWord / Math.max(1, tokens.length - 1) * 100) + '%' : '0%';
+    $('dur').textContent = 'part ~' + fmtDur(tokens.length * SPW / rate);
+    if (tokens.length) $('seek').value = String(Math.round(curWord / Math.max(1, tokens.length - 1) * 1000));
+    if (sleepUntil && Date.now() >= sleepUntil) { sleepUntil = 0; $('sleep').value = '0'; pause(); }
+  }
+  function savePosData(chunk, seconds, finished, beacon, word) {
+    const opts = {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chunk: chunk, seconds: seconds || 0, word: word || 0, finished: !!finished }),
+    };
+    if (beacon) opts.keepalive = true;
+    fetch(API + '/position', opts).catch(() => {});
+  }
+  function savePos(force, beacon) {
+    const now = Date.now();
+    if (!force && now - lastSave < 3000) return;
+    lastSave = now;
+    savePosData(cur, curWord * SPW, false, beacon, curWord);
+  }
+  // Heartbeat: engines without boundary events would otherwise never save
+  // while speaking.
+  setInterval(() => { if (speaking) { updateGlobal(); savePos(false); } }, 3000);
+  window.addEventListener('beforeunload', () => { savePos(true, true); try { speechSynthesis.cancel(); } catch (e) {} });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePos(true, true); });
+
+  // ---------------- contents drawer ----------------
+  function buildContents() {
+    const box = $('chapList');
+    const chs = book.chapters || [];
+    if (chs.length) {
+      box.innerHTML = chs.map(c => {
+        const w = chunkMeta(c.chunk).words_start || 0;
+        const pct = Math.round(w / Math.max(1, book.total_words) * 100);
+        return '<div class="px-2 py-2 rounded hover:bg-slate-100 cursor-pointer flex justify-between gap-3" data-goto="' + c.chunk + '">'
+          + '<span class="min-w-0 truncate">' + esc(c.title) + '</span>'
+          + '<span class="text-xs text-slate-400 shrink-0">' + pct + '%</span></div>';
+      }).join('');
+    } else {
+      box.innerHTML = '<div class="px-2 pb-2 text-xs text-slate-400">No chapters detected — parts instead.</div>'
+        + '<div class="grid grid-cols-5 gap-1 px-2">'
+        + (book.chunks || []).map(c => '<button type="button" class="border border-slate-200 rounded py-1 text-xs hover:bg-slate-100" data-goto="' + c.idx + '">' + (c.idx + 1) + '</button>').join('')
+        + '</div>';
+    }
+  }
+  $('chapBtn').addEventListener('click', () => $('chap').classList.remove('hidden'));
+  $('chap').addEventListener('click', (e) => {
+    if (e.target.closest('[data-chapclose]')) { $('chap').classList.add('hidden'); return; }
+    const go = e.target.closest('[data-goto]');
+    if (go) { $('chap').classList.add('hidden'); loadChunk(+go.dataset.goto, { word: 0, autoplay: speaking }); }
+  });
+</script>
+</body>
+</html>
