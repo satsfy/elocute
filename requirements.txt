@@ -1,0 +1,11 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+itsdangerous>=2.1
+bcrypt>=4.0
+psycopg[binary]>=3.1
+psycopg-pool>=3.2
+pymupdf>=1.24
+ebooklib>=0.18
+beautifulsoup4>=4.12
+markdown>=3.6
