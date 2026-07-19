@@ -68,6 +68,7 @@ def healthz():
 
 
 @app.get("/")
+@app.head("/")  # fleet monitoring probes with HEAD; a 405 there reads as down
 def index_page():
     return FileResponse(str(FRONTEND / "index.html"))
 
