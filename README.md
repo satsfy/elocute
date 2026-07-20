@@ -1,27 +1,10 @@
 # Loudreader
 
-Every book, read aloud by your browser. Free, forever.
+Listen to audiobooks as your browser read them.
 
-Upload a PDF, EPUB, Markdown or TXT (or paste any text). Loudreader extracts and
-cleans the text server-side, splits it into parts, and then **your browser's own
-speech synthesis reads it to you** with live word highlighting, an audiobook-style
-player (speed up to 4x, sleep timer, chapters, jump anywhere), and automatic
-progress saving. No GPU, no TTS API bills, no audio files stored anywhere: the
-server only ever holds text.
+Upload a PDF, EPUB, Markdown or TXT. Loudreader extracts and
+cleans the text, splits it into parts, and then **your browser's TTS reads it** with live word highlighting, audiobook-style player. You can optionally signup to save the books you uploded across sessions and device, with automatic progress saving.
 
-- **No account needed.** Books and progress stick to your browser via an
-  anonymous cookie.
-- **Create an account** (email + password) and everything you already imported
-  is claimed by it, synced through Postgres, and resumes on any device.
-- Voice quality depends on the client: Edge and Android ship excellent free
-  voices, Chrome desktop is decent, Linux browsers fall back to espeak.
-
-## Stack
-
-FastAPI + uvicorn, Postgres (`psycopg`), vanilla HTML/JS frontend (no build
-step), one Docker image. Text extraction: PyMuPDF (PDF), ebooklib +
-BeautifulSoup (EPUB), plain parsing for Markdown/TXT — including PDF
-header/footer/page-number cleanup, hyphenation repair and chapter detection.
 
 ## Run
 

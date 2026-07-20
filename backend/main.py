@@ -1,12 +1,7 @@
-"""Loudreader: every book, read aloud by your browser.
+"""Loudreader: Listen to audiobooks as your browser read them.
 
-FastAPI app serving the static frontend and a small JSON API. The server only
-ever stores text (books split into ~900-word parts) plus reading positions;
-all speech happens client-side via the Web Speech API, so hosting this is
-free of GPU/TTS costs.
-
-Identity is anonymous-first (signed cookie); creating an account claims the
-anonymous books so nothing is lost. See auth.py.
+Upload a PDF, EPUB, Markdown or TXT. Loudreader extracts and
+cleans the text, splits it into parts, and then **your browser's TTS reads it** with live word highlighting, audiobook-style player. You can optionally signup to save the books you uploded across sessions and device, with automatic progress saving.
 """
 
 from __future__ import annotations
