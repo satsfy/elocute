@@ -1,257 +1,482 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Loudreader — every book, read aloud. Free.</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    .clamp2 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  </style>
-</head>
-<body class="bg-slate-50 text-slate-900 min-h-screen">
-  <header class="bg-white border-b border-slate-200">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-      <a href="/" class="font-semibold text-lg">&#128266; Loudreader</a>
-      <div class="flex items-center gap-3 text-sm">
-        <span id="whoami" class="text-slate-500 hidden truncate max-w-[12rem]"></span>
-        <button id="accountBtn" type="button" class="text-slate-700 underline">Sign in</button>
-        <button id="logoutBtn" type="button" class="hidden text-slate-500 underline">Log out</button>
-      </div>
-    </div>
-  </header>
-
-  <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-    <section class="mb-8">
-      <h1 class="text-3xl font-semibold mb-2">Every book, read aloud.</h1>
-      <p class="text-slate-600 max-w-2xl">Upload a PDF, EPUB, Markdown or TXT — or paste any text — and your browser reads it to you with live word highlighting, chapters, speed control and a position that never gets lost. Free, no ads, no account required.</p>
-    </section>
-
-    <section class="bg-white border border-slate-200 rounded-lg p-4 mb-8">
-      <form id="form" class="space-y-4">
-        <label id="drop" class="block border-2 border-dashed border-slate-300 rounded-lg p-6 text-center cursor-pointer hover:border-slate-400">
-          <input id="file" type="file" accept=".pdf,.epub,.md,.markdown,.txt" class="hidden">
-          <div id="fileLabel" class="text-slate-600">
-            <span class="font-medium">Click to choose a book</span> or drag it here
-            <div class="text-xs mt-1 text-slate-400">PDF &middot; EPUB &middot; Markdown &middot; TXT (max 80 MB)</div>
-          </div>
-          <button id="clearFile" type="button" class="hidden mt-2 text-xs text-red-600 underline">remove file</button>
-        </label>
-        <details class="border border-slate-200 rounded-lg p-3">
-          <summary class="cursor-pointer text-sm text-slate-600">&hellip;or paste text instead</summary>
-          <input id="ptitle" class="mt-3 w-full border border-slate-200 rounded p-2 text-sm" placeholder="Title (optional)">
-          <textarea id="text" rows="5" class="mt-2 w-full border border-slate-200 rounded p-2 text-sm" placeholder="Paste anything long enough to be worth listening to"></textarea>
-        </details>
-        <button id="go" type="submit" class="w-full bg-slate-900 text-white rounded-lg py-3 font-medium hover:bg-slate-800 disabled:opacity-50">Add to my library</button>
-        <div id="impError" class="text-red-700 text-sm hidden"></div>
-        <div id="impStatus" class="text-sm text-slate-600 hidden"></div>
-      </form>
-    </section>
-
-    <section>
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="text-lg font-semibold">Your library</h2>
-        <button id="refresh" type="button" class="text-sm text-slate-500 underline">Refresh</button>
-      </div>
-      <div id="shelf" class="text-sm text-slate-500">Loading&hellip;</div>
-    </section>
-
-    <footer class="mt-12 text-xs text-slate-400">
-      The reading voice comes from your own browser, so it is instant and free. Edge and Android phones have the best voices.
-      Your books are private to this browser until you create an account, which syncs them across devices.
-    </footer>
-  </main>
-
-  <div id="modal" class="fixed inset-0 z-30 hidden">
-    <div class="absolute inset-0 bg-slate-900/40" data-close></div>
-    <div class="absolute inset-x-4 top-16 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:w-96 bg-white rounded-lg shadow-xl p-5">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex gap-4 text-sm">
-          <button id="tabLogin" type="button" class="font-semibold border-b-2 border-slate-900 pb-1">Sign in</button>
-          <button id="tabRegister" type="button" class="text-slate-500 pb-1">Create account</button>
-        </div>
-        <button type="button" data-close class="text-slate-400 hover:text-slate-700">&#10005;</button>
-      </div>
-      <p id="modalHint" class="text-xs text-slate-500 mb-3">An account keeps your books and reading positions synced on every device. Books already on this browser move into it automatically.</p>
-      <form id="authForm" class="space-y-3">
-        <input id="email" type="email" required class="w-full border border-slate-200 rounded p-2 text-sm" placeholder="email">
-        <input id="password" type="password" required minlength="8" class="w-full border border-slate-200 rounded p-2 text-sm" placeholder="password (8+ characters)">
-        <button id="authGo" type="submit" class="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-slate-800 disabled:opacity-50">Sign in</button>
-        <div id="authError" class="text-red-700 text-sm hidden"></div>
-      </form>
-    </div>
-  </div>
-
-<script>
-  const $ = (id) => document.getElementById(id);
-  const SPW = 0.42; // rough seconds per word for time estimates
-
-  function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
-  function fmtDur(sec) {
-    sec = Math.max(0, sec);
-    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-    return h ? h + 'h ' + String(m).padStart(2, '0') + 'm' : m + 'm';
-  }
-
-  // ---- account ----
-  let authMode = 'login';
-  async function refreshMe() {
-    try {
-      const me = await (await fetch('/api/me')).json();
-      if (me.user) {
-        $('whoami').textContent = me.user; $('whoami').classList.remove('hidden');
-        $('accountBtn').classList.add('hidden'); $('logoutBtn').classList.remove('hidden');
-      } else {
-        $('whoami').classList.add('hidden');
-        $('accountBtn').classList.remove('hidden'); $('logoutBtn').classList.add('hidden');
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loudreader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .clamp2 {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
       }
-    } catch (e) {}
-  }
-  $('accountBtn').addEventListener('click', () => $('modal').classList.remove('hidden'));
-  $('logoutBtn').addEventListener('click', async () => {
-    await fetch('/api/logout', { method: 'POST' }).catch(() => {});
-    refreshMe(); loadShelf();
-  });
-  $('modal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) $('modal').classList.add('hidden'); });
-  function setTab(mode) {
-    authMode = mode;
-    $('tabLogin').className = mode === 'login' ? 'font-semibold border-b-2 border-slate-900 pb-1' : 'text-slate-500 pb-1';
-    $('tabRegister').className = mode === 'register' ? 'font-semibold border-b-2 border-slate-900 pb-1' : 'text-slate-500 pb-1';
-    $('authGo').textContent = mode === 'login' ? 'Sign in' : 'Create account';
-    $('authError').classList.add('hidden');
-  }
-  $('tabLogin').addEventListener('click', () => setTab('login'));
-  $('tabRegister').addEventListener('click', () => setTab('register'));
-  $('authForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    $('authGo').disabled = true; $('authError').classList.add('hidden');
-    try {
-      const r = await fetch('/api/' + (authMode === 'login' ? 'login' : 'register'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.detail || 'Something went wrong.');
-      $('modal').classList.add('hidden');
-      refreshMe(); loadShelf();
-    } catch (err) {
-      $('authError').textContent = err.message; $('authError').classList.remove('hidden');
-    } finally { $('authGo').disabled = false; }
-  });
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900 min-h-screen">
+    <header class="bg-white border-b border-slate-200">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+        <a href="/" class="font-semibold text-lg">&#128266; Loudreader</a>
+        <div class="flex items-center gap-3 text-sm">
+          <span id="whoami" class="text-slate-500 hidden truncate max-w-[12rem]"></span>
+          <button id="accountBtn" type="button" class="text-slate-700 underline">Sign in</button>
+          <button id="logoutBtn" type="button" class="hidden text-slate-500 underline">
+            Log out
+          </button>
+        </div>
+      </div>
+    </header>
 
-  // ---- import ----
-  const drop = $('drop'), fileInput = $('file');
-  try { fileInput.value = ''; } catch (e) {}
-  function refreshFileLabel() {
-    if (fileInput.files.length) {
-      $('fileLabel').innerHTML = '<span class="font-medium">' + esc(fileInput.files[0].name) + '</span>';
-      $('clearFile').classList.remove('hidden');
-    } else {
-      $('fileLabel').innerHTML = '<span class="font-medium">Click to choose a book</span> or drag it here'
-        + '<div class="text-xs mt-1 text-slate-400">PDF · EPUB · Markdown · TXT (max 80 MB)</div>';
-      $('clearFile').classList.add('hidden');
-    }
-  }
-  fileInput.addEventListener('change', refreshFileLabel);
-  $('clearFile').addEventListener('click', (e) => { e.preventDefault(); fileInput.value = ''; refreshFileLabel(); });
-  ['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('border-slate-500'); }));
-  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('border-slate-500'); }));
-  drop.addEventListener('drop', e => {
-    if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; fileInput.dispatchEvent(new Event('change')); }
-  });
+    <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <section class="mb-8">
+        <h1 class="text-3xl font-semibold mb-2">Listen to any PDF as an audiobook for free.</h1>
+        <p class="text-slate-600">
+          Upload a PDF, EPUB, Markdown or paste text. Loudreader extracts and cleans the text,
+          splits it into parts, and then your browser's built-in TTS reads it with live word
+          highlighting like an audiobook. You can optionally sign up to save the books you uploaded
+          across sessions and devices, with automatic progress saving.
+        </p>
+      </section>
 
-  function impFail(msg) {
-    $('impError').textContent = msg; $('impError').classList.remove('hidden');
-    $('impStatus').classList.add('hidden');
-    $('go').disabled = false; $('go').textContent = 'Add to my library';
-  }
-  $('form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const hasFile = fileInput.files.length > 0;
-    const text = $('text').value.trim();
-    if (!hasFile && !text) { impFail('Choose a file or paste some text first.'); return; }
-    const fd = new FormData();
-    if (hasFile) fd.append('file', fileInput.files[0]);
-    else { fd.append('text', text); fd.append('title', $('ptitle').value.trim()); }
-    $('go').disabled = true; $('go').textContent = 'Preparing…';
-    $('impError').classList.add('hidden');
-    $('impStatus').textContent = 'Extracting and cleaning the text… bigger books can take a minute.';
-    $('impStatus').classList.remove('hidden');
-    let res;
-    try { res = await fetch('/api/import', { method: 'POST', body: fd }); }
-    catch (err) { impFail('Network error.'); return; }
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) { impFail(j.detail || 'Import failed.'); return; }
-    window.location = '/b/' + j.id;
-  });
+      <section class="mb-8">
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
+          If you enjoy Loudreader, consider a small Bitcoin Lightning donation to
+          <span class="font-bold">satsfy@bipa.app</span>
+        </div>
+      </section>
 
-  // ---- shelf ----
-  function coverHtml(it) {
-    if (it.cover_url) return '<img src="' + esc(it.cover_url) + '" alt="" class="w-full h-full object-cover" loading="lazy">';
-    const initials = (it.title || '?').split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
-    const hues = [210, 260, 20, 150, 330, 40];
-    const h = hues[(it.id || '').charCodeAt(0) % hues.length];
-    return '<div class="w-full h-full flex items-center justify-center text-3xl font-semibold text-white" '
-      + 'style="background:linear-gradient(160deg,hsl(' + h + ',45%,38%),hsl(' + (h + 40) + ',50%,22%))">' + esc(initials) + '</div>';
-  }
-  function bookCard(it) {
-    const done = (it.cur_words_start || 0) + Math.min(1, (it.cur_word || 0) / Math.max(1, it.cur_word_count || 1)) * (it.cur_word_count || 0);
-    const pct = it.finished ? 100 : Math.min(100, Math.round(done / Math.max(1, it.total_words) * 100));
-    const left = it.finished ? 'Finished' : (pct === 0 ? '~' + fmtDur(it.total_words * SPW) : '~' + fmtDur((it.total_words - done) * SPW) + ' left');
-    const sub = [it.author, (it.total_words || 0).toLocaleString() + ' words'].filter(Boolean).join(' · ');
-    return '<div class="relative group bg-white border border-slate-200 rounded-lg overflow-hidden hover:border-slate-400 hover:shadow-sm transition">'
-      + '<a href="' + esc(it.url) + '" class="block">'
-      + '<div class="aspect-[3/4] bg-slate-100">' + coverHtml(it) + '</div>'
-      + '<div class="p-3">'
-      + '<div class="font-medium text-slate-900 clamp2 leading-snug text-sm">' + esc(it.title) + '</div>'
-      + '<div class="text-xs text-slate-500 mt-0.5 truncate">' + esc(sub) + '</div>'
-      + '<div class="mt-2 w-full bg-slate-200 rounded h-1.5 overflow-hidden"><div class="h-1.5 ' + (it.finished ? 'bg-green-600' : 'bg-slate-900') + '" style="width:' + pct + '%"></div></div>'
-      + '<div class="flex justify-between text-[11px] text-slate-500 mt-1"><span>' + pct + '%</span><span>' + esc(left) + '</span></div>'
-      + '</div></a>'
-      + '<button type="button" data-del="' + esc(it.id) + '" title="Delete" class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-white/90 border border-slate-200 text-slate-500 hover:text-red-600 hover:border-red-300 text-xs leading-none opacity-0 group-hover:opacity-100 transition">&#10005;</button>'
-      + '</div>';
-  }
-  async function loadShelf() {
-    let r, j;
-    try { r = await fetch('/api/books'); j = await r.json(); }
-    catch (e) { $('shelf').className = 'text-sm text-red-600'; $('shelf').textContent = 'Could not load your library.'; return; }
-    if (!r.ok) { $('shelf').className = 'text-sm text-red-600'; $('shelf').textContent = j.detail || ('Library unavailable (HTTP ' + r.status + ').'); return; }
-    const items = j.items || [];
-    if (!items.length) {
-      $('shelf').className = 'text-sm text-slate-500';
-      $('shelf').innerHTML = 'Nothing here yet. Add a book above, or '
-        + '<button id="demoBtn" type="button" class="underline text-slate-900">try the two-minute demo book</button>.';
-      const btn = document.getElementById('demoBtn');
-      btn.addEventListener('click', async () => {
-        btn.disabled = true; btn.textContent = 'Preparing the demo…';
+      <section class="bg-white border border-slate-200 rounded-lg p-4 mb-8">
+        <form id="form" class="space-y-4">
+          <label
+            id="drop"
+            class="block border-2 border-dashed border-slate-300 rounded-lg p-6 text-center cursor-pointer hover:border-slate-400"
+          >
+            <input id="file" type="file" accept=".pdf,.epub,.md,.markdown,.txt" class="hidden" />
+            <div id="fileLabel" class="text-slate-600">
+              <span class="font-medium">Click to choose a book</span> or drag it here
+              <div class="text-xs mt-1 text-slate-400">
+                PDF &middot; EPUB &middot; Markdown &middot; TXT (max 80 MB)
+              </div>
+            </div>
+            <button id="clearFile" type="button" class="hidden mt-2 text-xs text-red-600 underline">
+              remove file
+            </button>
+          </label>
+          <details class="border border-slate-200 rounded-lg p-3">
+            <summary class="cursor-pointer text-sm text-slate-600">
+              &hellip;or paste text instead
+            </summary>
+            <input
+              id="ptitle"
+              class="mt-3 w-full border border-slate-200 rounded p-2 text-sm"
+              placeholder="Title (optional)"
+            />
+            <textarea
+              id="text"
+              rows="5"
+              class="mt-2 w-full border border-slate-200 rounded p-2 text-sm"
+              placeholder="Paste anything long enough to be worth listening to"
+            ></textarea>
+          </details>
+          <button
+            id="go"
+            type="submit"
+            class="w-full bg-slate-900 text-white rounded-lg py-3 font-medium hover:bg-slate-800 disabled:opacity-50"
+          >
+            Add to my library
+          </button>
+          <div id="impError" class="text-red-700 text-sm hidden"></div>
+          <div id="impStatus" class="text-sm text-slate-600 hidden"></div>
+        </form>
+      </section>
+
+      <section>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold">Your library</h2>
+          <button id="refresh" type="button" class="text-sm text-slate-500 underline">
+            Refresh
+          </button>
+        </div>
+        <div id="shelf" class="text-sm text-slate-500">Loading&hellip;</div>
+      </section>
+    </main>
+
+    <div id="modal" class="fixed inset-0 z-30 hidden">
+      <div class="absolute inset-0 bg-slate-900/40" data-close></div>
+      <div
+        class="absolute inset-x-4 top-16 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:w-96 bg-white rounded-lg shadow-xl p-5"
+      >
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex gap-4 text-sm">
+            <button
+              id="tabLogin"
+              type="button"
+              class="font-semibold border-b-2 border-slate-900 pb-1"
+            >
+              Sign in
+            </button>
+            <button id="tabRegister" type="button" class="text-slate-500 pb-1">
+              Create account
+            </button>
+          </div>
+          <button type="button" data-close class="text-slate-400 hover:text-slate-700">
+            &#10005;
+          </button>
+        </div>
+        <p id="modalHint" class="text-xs text-slate-500 mb-3">
+          An account keeps your books and reading positions synced on every device. Books already on
+          this browser move into it automatically.
+        </p>
+        <form id="authForm" class="space-y-3" novalidate>
+          <input
+            id="email"
+            type="email"
+            required
+            class="w-full border border-slate-200 rounded p-2 text-sm"
+            placeholder="email"
+          />
+          <input
+            id="password"
+            type="password"
+            required
+            minlength="8"
+            class="w-full border border-slate-200 rounded p-2 text-sm"
+            placeholder="password (8+ characters)"
+          />
+          <button
+            id="authGo"
+            type="submit"
+            class="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-slate-800 disabled:opacity-50"
+          >
+            Sign in
+          </button>
+          <div id="authError" class="text-red-700 text-sm hidden"></div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const SPW = 0.42; // rough seconds per word for time estimates
+
+      function esc(s) {
+        const d = document.createElement("div");
+        d.textContent = s == null ? "" : String(s);
+        return d.innerHTML;
+      }
+      function fmtDur(sec) {
+        sec = Math.max(0, sec);
+        const h = Math.floor(sec / 3600),
+          m = Math.round((sec % 3600) / 60);
+        return h ? h + "h " + String(m).padStart(2, "0") + "m" : m + "m";
+      }
+
+      // ---- account ----
+      let authMode = "login";
+      async function refreshMe() {
         try {
-          const rr = await fetch('/api/demo', { method: 'POST' });
-          const jj = await rr.json();
-          if (rr.ok && jj.id) { window.location = '/b/' + jj.id; return; }
-          alert(jj.detail || 'Demo failed.');
-        } catch (e) { alert('Network error.'); }
-        btn.disabled = false; btn.textContent = 'try the two-minute demo book';
+          const me = await (await fetch("/api/me")).json();
+          if (me.user) {
+            $("whoami").textContent = me.user;
+            $("whoami").classList.remove("hidden");
+            $("accountBtn").classList.add("hidden");
+            $("logoutBtn").classList.remove("hidden");
+          } else {
+            $("whoami").classList.add("hidden");
+            $("accountBtn").classList.remove("hidden");
+            $("logoutBtn").classList.add("hidden");
+          }
+        } catch (e) {}
+      }
+      $("accountBtn").addEventListener("click", () => $("modal").classList.remove("hidden"));
+      $("logoutBtn").addEventListener("click", async () => {
+        await fetch("/api/logout", { method: "POST" }).catch(() => {});
+        refreshMe();
+        loadShelf();
       });
-      return;
-    }
-    $('shelf').className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4';
-    $('shelf').innerHTML = items.map(bookCard).join('');
-  }
-  $('shelf').addEventListener('click', async (e) => {
-    const del = e.target.closest('[data-del]');
-    if (!del) return;
-    e.preventDefault();
-    if (!confirm('Delete this book and its progress permanently?')) return;
-    del.disabled = true;
-    try {
-      const r = await fetch('/api/books/' + del.dataset.del, { method: 'DELETE' });
-      if (r.ok) loadShelf(); else { del.disabled = false; alert('Delete failed.'); }
-    } catch (err) { del.disabled = false; alert('Delete failed: network error.'); }
-  });
-  $('refresh').addEventListener('click', loadShelf);
+      $("modal").addEventListener("click", (e) => {
+        if (e.target.closest("[data-close]")) $("modal").classList.add("hidden");
+      });
+      function setTab(mode) {
+        authMode = mode;
+        $("tabLogin").className =
+          mode === "login"
+            ? "font-semibold border-b-2 border-slate-900 pb-1"
+            : "text-slate-500 pb-1";
+        $("tabRegister").className =
+          mode === "register"
+            ? "font-semibold border-b-2 border-slate-900 pb-1"
+            : "text-slate-500 pb-1";
+        $("authGo").textContent = mode === "login" ? "Sign in" : "Create account";
+        $("authError").classList.add("hidden");
+      }
+      $("tabLogin").addEventListener("click", () => setTab("login"));
+      $("tabRegister").addEventListener("click", () => setTab("register"));
+      const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+      function showAuthError(msg) {
+        $("authError").textContent = msg;
+        $("authError").classList.remove("hidden");
+      }
+      $("authForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        $("authError").classList.add("hidden");
+        const email = $("email").value.trim();
+        const password = $("password").value;
+        if (!EMAIL_RE.test(email)) {
+          showAuthError("Enter a valid email address, like you@example.com.");
+          return;
+        }
+        if (password.length < 8) {
+          showAuthError("Password needs at least 8 characters.");
+          return;
+        }
+        $("authGo").disabled = true;
+        try {
+          const r = await fetch("/api/" + (authMode === "login" ? "login" : "register"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.detail || "Something went wrong.");
+          $("modal").classList.add("hidden");
+          refreshMe();
+          loadShelf();
+        } catch (err) {
+          showAuthError(err.message || "Something went wrong. Please try again.");
+        } finally {
+          $("authGo").disabled = false;
+        }
+      });
 
-  refreshMe();
-  loadShelf();
-</script>
-</body>
+      // ---- import ----
+      const drop = $("drop"),
+        fileInput = $("file");
+      try {
+        fileInput.value = "";
+      } catch (e) {}
+      function refreshFileLabel() {
+        if (fileInput.files.length) {
+          $("fileLabel").innerHTML =
+            '<span class="font-medium">' + esc(fileInput.files[0].name) + "</span>";
+          $("clearFile").classList.remove("hidden");
+        } else {
+          $("fileLabel").innerHTML =
+            '<span class="font-medium">Click to choose a book</span> or drag it here' +
+            '<div class="text-xs mt-1 text-slate-400">PDF · EPUB · Markdown · TXT (max 80 MB)</div>';
+          $("clearFile").classList.add("hidden");
+        }
+      }
+      fileInput.addEventListener("change", refreshFileLabel);
+      $("clearFile").addEventListener("click", (e) => {
+        e.preventDefault();
+        fileInput.value = "";
+        refreshFileLabel();
+      });
+      ["dragover", "dragenter"].forEach((ev) =>
+        drop.addEventListener(ev, (e) => {
+          e.preventDefault();
+          drop.classList.add("border-slate-500");
+        }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        drop.addEventListener(ev, (e) => {
+          e.preventDefault();
+          drop.classList.remove("border-slate-500");
+        }),
+      );
+      drop.addEventListener("drop", (e) => {
+        if (e.dataTransfer.files.length) {
+          fileInput.files = e.dataTransfer.files;
+          fileInput.dispatchEvent(new Event("change"));
+        }
+      });
+
+      function impFail(msg) {
+        $("impError").textContent = msg;
+        $("impError").classList.remove("hidden");
+        $("impStatus").classList.add("hidden");
+        $("go").disabled = false;
+        $("go").textContent = "Add to my library";
+      }
+      $("form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const hasFile = fileInput.files.length > 0;
+        const text = $("text").value.trim();
+        if (!hasFile && !text) {
+          impFail("Choose a file or paste some text first.");
+          return;
+        }
+        const fd = new FormData();
+        if (hasFile) fd.append("file", fileInput.files[0]);
+        else {
+          fd.append("text", text);
+          fd.append("title", $("ptitle").value.trim());
+        }
+        $("go").disabled = true;
+        $("go").textContent = "Preparing…";
+        $("impError").classList.add("hidden");
+        $("impStatus").textContent =
+          "Extracting and cleaning the text… bigger books can take a minute.";
+        $("impStatus").classList.remove("hidden");
+        let res;
+        try {
+          res = await fetch("/api/import", { method: "POST", body: fd });
+        } catch (err) {
+          impFail("Network error.");
+          return;
+        }
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          impFail(j.detail || "Import failed.");
+          return;
+        }
+        window.location = "/b/" + j.id;
+      });
+
+      // ---- shelf ----
+      function coverHtml(it) {
+        if (it.cover_url)
+          return (
+            '<img src="' +
+            esc(it.cover_url) +
+            '" alt="" class="w-full h-full object-cover" loading="lazy">'
+          );
+        const initials = (it.title || "?")
+          .split(/\s+/)
+          .slice(0, 2)
+          .map((w) => w[0] || "")
+          .join("")
+          .toUpperCase();
+        const hues = [210, 260, 20, 150, 330, 40];
+        const h = hues[(it.id || "").charCodeAt(0) % hues.length];
+        return (
+          '<div class="w-full h-full flex items-center justify-center text-3xl font-semibold text-white" ' +
+          'style="background:linear-gradient(160deg,hsl(' +
+          h +
+          ",45%,38%),hsl(" +
+          (h + 40) +
+          ',50%,22%))">' +
+          esc(initials) +
+          "</div>"
+        );
+      }
+      function bookCard(it) {
+        const done =
+          (it.cur_words_start || 0) +
+          Math.min(1, (it.cur_word || 0) / Math.max(1, it.cur_word_count || 1)) *
+            (it.cur_word_count || 0);
+        const pct = it.finished
+          ? 100
+          : Math.min(100, Math.round((done / Math.max(1, it.total_words)) * 100));
+        const left = it.finished
+          ? "Finished"
+          : pct === 0
+            ? "~" + fmtDur(it.total_words * SPW)
+            : "~" + fmtDur((it.total_words - done) * SPW) + " left";
+        const sub = [it.author, (it.total_words || 0).toLocaleString() + " words"]
+          .filter(Boolean)
+          .join(" · ");
+        return (
+          '<div class="relative group bg-white border border-slate-200 rounded-lg overflow-hidden hover:border-slate-400 hover:shadow-sm transition">' +
+          '<a href="' +
+          esc(it.url) +
+          '" class="block">' +
+          '<div class="aspect-[3/4] bg-slate-100">' +
+          coverHtml(it) +
+          "</div>" +
+          '<div class="p-3">' +
+          '<div class="font-medium text-slate-900 clamp2 leading-snug text-sm">' +
+          esc(it.title) +
+          "</div>" +
+          '<div class="text-xs text-slate-500 mt-0.5 truncate">' +
+          esc(sub) +
+          "</div>" +
+          '<div class="mt-2 w-full bg-slate-200 rounded h-1.5 overflow-hidden"><div class="h-1.5 ' +
+          (it.finished ? "bg-green-600" : "bg-slate-900") +
+          '" style="width:' +
+          pct +
+          '%"></div></div>' +
+          '<div class="flex justify-between text-[11px] text-slate-500 mt-1"><span>' +
+          pct +
+          "%</span><span>" +
+          esc(left) +
+          "</span></div>" +
+          "</div></a>" +
+          '<button type="button" data-del="' +
+          esc(it.id) +
+          '" title="Delete" class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-white/90 border border-slate-200 text-slate-500 hover:text-red-600 hover:border-red-300 text-xs leading-none opacity-0 group-hover:opacity-100 transition">&#10005;</button>' +
+          "</div>"
+        );
+      }
+      async function loadShelf() {
+        let r, j;
+        try {
+          r = await fetch("/api/books");
+          j = await r.json();
+        } catch (e) {
+          $("shelf").className = "text-sm text-red-600";
+          $("shelf").textContent = "Could not load your library.";
+          return;
+        }
+        if (!r.ok) {
+          $("shelf").className = "text-sm text-red-600";
+          $("shelf").textContent = j.detail || "Library unavailable (HTTP " + r.status + ").";
+          return;
+        }
+        const items = j.items || [];
+        if (!items.length) {
+          $("shelf").className = "text-sm text-slate-500";
+          $("shelf").innerHTML =
+            "Nothing here yet. Add a book above, or " +
+            '<button id="demoBtn" type="button" class="underline text-slate-900">try the two-minute demo book</button>.';
+          const btn = document.getElementById("demoBtn");
+          btn.addEventListener("click", async () => {
+            btn.disabled = true;
+            btn.textContent = "Preparing the demo…";
+            try {
+              const rr = await fetch("/api/demo", { method: "POST" });
+              const jj = await rr.json();
+              if (rr.ok && jj.id) {
+                window.location = "/b/" + jj.id;
+                return;
+              }
+              alert(jj.detail || "Demo failed.");
+            } catch (e) {
+              alert("Network error.");
+            }
+            btn.disabled = false;
+            btn.textContent = "try the two-minute demo book";
+          });
+          return;
+        }
+        $("shelf").className =
+          "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4";
+        $("shelf").innerHTML = items.map(bookCard).join("");
+      }
+      $("shelf").addEventListener("click", async (e) => {
+        const del = e.target.closest("[data-del]");
+        if (!del) return;
+        e.preventDefault();
+        if (!confirm("Delete this book and its progress permanently?")) return;
+        del.disabled = true;
+        try {
+          const r = await fetch("/api/books/" + del.dataset.del, { method: "DELETE" });
+          if (r.ok) loadShelf();
+          else {
+            del.disabled = false;
+            alert("Delete failed.");
+          }
+        } catch (err) {
+          del.disabled = false;
+          alert("Delete failed: network error.");
+        }
+      });
+      $("refresh").addEventListener("click", loadShelf);
+
+      refreshMe();
+      loadShelf();
+    </script>
+  </body>
 </html>
