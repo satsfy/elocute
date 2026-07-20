@@ -245,8 +245,10 @@ async def import_book(request: Request):
 def import_demo(request: Request):
     """Seed the shelf with the bundled public-domain sample."""
     sample = (FRONTEND / "sample.txt").read_text(encoding="utf-8")
+    # Title follows whatever sample ships: its first non-empty line.
+    first_line = next((ln.strip() for ln in sample.splitlines() if ln.strip()), "Sample book")
     doc = bookprep.prepare_book(
-        "The Lighthouse Keeper.txt", sample.encode(), title_hint="The Lighthouse Keeper (sample)"
+        "sample.txt", sample.encode(), title_hint=f"{first_line[:80]} (sample)"
     )
     user_id, anon_id = auth.identity(request)
     book_id = str(uuid.uuid4())
@@ -263,7 +265,7 @@ def import_demo(request: Request):
                     user_id,
                     None if user_id else anon_id,
                     doc.get("title"),
-                    "Loudreader",
+                    None,
                     "sample",
                     doc.get("total_words") or 0,
                     doc.get("total_chunks") or 0,
