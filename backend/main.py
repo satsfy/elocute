@@ -76,6 +76,11 @@ def index_page():
     return FileResponse(str(FRONTEND / "index.html"))
 
 
+@app.get("/about")
+def about_page():
+    return FileResponse(str(FRONTEND / "about.html"))
+
+
 @app.get("/b/{book_id}")
 def reader_page(book_id: str):
     _check_id(book_id)
@@ -100,6 +105,7 @@ def sitemap_xml():
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         f"<url><loc>{BASE_URL}/</loc><changefreq>weekly</changefreq></url>"
+        f"<url><loc>{BASE_URL}/about</loc><changefreq>monthly</changefreq></url>"
         "</urlset>",
         media_type="application/xml",
     )
@@ -117,6 +123,7 @@ def llms_txt():
         "> timer and automatic progress saving.\n"
         "\n"
         f"- Website: {BASE_URL}/\n"
+        f"- How it works + FAQ: {BASE_URL}/about\n"
         "- Price: free, no ads, no account required\n"
         "- An optional email account syncs books and reading position across devices\n"
         "- Formats: PDF, EPUB, Markdown, TXT, pasted text (max 80 MB)\n"
