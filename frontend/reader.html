@@ -7,7 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     #reader { font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }
-    #reader p { font-size: 1.25rem; line-height: 2.0; margin: 0 0 1.1rem; color: #1e293b; }
+    #reader p { font-size: 1.25rem; line-height: 2.0; margin: 0 0 1.1rem; color: #1e293b; cursor: pointer; }
     #reader .w { border-radius: 4px; padding: 0 1px; cursor: pointer; transition: background-color .08s linear, color .08s linear; }
     #reader .w:hover { background: #e2e8f0; }
     #reader .w.sen { background: #f1f5f9; }
@@ -22,7 +22,7 @@
     <div class="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
       <a href="/" class="font-semibold">&#128266; Loudreader</a>
       <div class="flex items-center gap-3 text-sm">
-        <span id="partInfo" class="text-xs text-slate-500"></span>
+        <span id="chapInfo" class="text-xs text-slate-500"></span>
         <button id="chapBtn" type="button" class="text-slate-600 underline">Contents</button>
       </div>
     </div>
@@ -56,7 +56,7 @@
     </div>
     <div class="max-w-5xl mx-auto px-4 sm:px-6 py-3">
       <div class="flex items-center gap-2 text-xs text-slate-500 mb-2">
-        <span id="cur" class="tabular-nums">0%</span>
+        <span id="cur" class="tabular-nums">0m</span>
         <input id="seek" type="range" min="0" max="1000" value="0" class="flex-1 accent-slate-900">
         <span id="dur" class="tabular-nums"></span>
       </div>
@@ -67,13 +67,13 @@
           <div id="barSub" class="text-xs text-slate-500 truncate"></div>
         </div>
         <div class="flex items-center gap-1.5 shrink-0">
-          <button id="prevPart" type="button" class="ctl text-slate-600 hover:bg-slate-100" title="Previous part">&#9198;</button>
+          <button id="prevChap" type="button" class="ctl text-slate-600 hover:bg-slate-100" title="Previous chapter">&#9198;</button>
           <button id="prevSen" type="button" class="ctl border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-medium" title="Previous sentence">&#8249;s</button>
           <button id="playBtn" type="button" class="w-12 h-12 rounded-full bg-slate-900 text-white flex items-center justify-center hover:bg-slate-800" aria-label="Play or pause">
             <span id="playIcon" class="text-xl leading-none">&#9654;</span>
           </button>
           <button id="nextSen" type="button" class="ctl border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-medium" title="Next sentence">s&#8250;</button>
-          <button id="nextPart" type="button" class="ctl text-slate-600 hover:bg-slate-100" title="Next part">&#9197;</button>
+          <button id="nextChap" type="button" class="ctl text-slate-600 hover:bg-slate-100" title="Next chapter">&#9197;</button>
         </div>
         <div class="w-full md:w-auto md:flex-1 min-w-0 flex flex-wrap items-center justify-center md:justify-end gap-2 text-xs">
           <span id="left" class="text-slate-500 truncate"></span>
@@ -97,7 +97,7 @@
             <option value="30">30 min</option>
             <option value="45">45 min</option>
             <option value="60">60 min</option>
-            <option value="end">End of part</option>
+            <option value="end">End of chapter</option>
           </select>
         </div>
       </div>
@@ -105,33 +105,39 @@
   </div>
 
 <script>
-  // Reader engine. Sentences are spoken as chained utterances (dodges Chrome's
-  // long-utterance cutoff); word boundary events drive the highlight; chainSeq
-  // gates every callback because engines can double-fire end/error events,
-  // which would otherwise fork two interleaved readings.
+  // Reader engine, chunk-free. The whole book arrives as one text and is
+  // rendered as plain paragraphs (browsers handle megabytes of text fine);
+  // only the paragraph being read is exploded into word spans, so highlight
+  // DOM cost stays constant no matter the book size. Sentences are spoken as
+  // chained utterances (dodges Chrome's long-utterance cutoff); word boundary
+  // events drive the highlight; chainSeq gates every callback because engines
+  // can double-fire end/error events, which would otherwise fork two
+  // interleaved readings.
   const BOOK_ID = location.pathname.split('/').pop();
   const $ = (id) => document.getElementById(id);
   const API = '/api/books/' + BOOK_ID;
   const RATE_KEY = 'lr:rate';
   const VOICE_KEY = 'lr:voice';
   const SPW = 0.42;
+  const SENT_END = /[.!?…]["'”’)\]]?$/;
 
   let book = null;
-  let cur = 0;
-  let tokens = [];
-  let spans = [];
-  let sentences = [];
-  let curWord = 0;
-  let curSentence = 0;
-  let speaking = false;
-  let activeIdx = -1;
+  let paraTokens = [];   // paraTokens[p] = array of word tokens
+  let paraStart = [];    // paraStart[p] = global word index of the para's first token
+  let paraEls = [];      // paraEls[p] = <p> element
+  let sentences = [];    // {para, off, len, start} - never cross paragraphs
+  let N = 0;             // total words
+  let activePara = -1;   // the one paragraph currently exploded into spans
+  let spans = [];        // span elements of the active paragraph, by local index
+  let onEl = null;       // span carrying the .on highlight
   let senMarked = [];
+  let curWord = 0;
+  let speaking = false;
   let lastSave = 0;
   let sleepUntil = 0;
   let sleepAtEnd = false;
   let errStreak = 0;
   let voices = [];
-  let nextText = {};
   let currentUtterance = null;
   let chainSeq = 0;
 
@@ -184,111 +190,126 @@
       $('voiceWarn').textContent = 'This browser has no speech support. Try Chrome, Edge, Safari or Firefox.';
       $('voiceWarn').classList.remove('hidden');
     }
-    let r;
-    try { r = await fetch(API); } catch (e) { return fail('Could not load this book.'); }
-    if (r.status === 404) return fail('This book is not in your library. <a class="underline" href="/">Back to the library</a>.');
-    if (!r.ok) return fail('Could not load this book (HTTP ' + r.status + ').');
-    book = await r.json();
+    let mr, tr;
+    try { [mr, tr] = await Promise.all([fetch(API), fetch(API + '/text')]); }
+    catch (e) { return fail('Could not load this book.'); }
+    if (mr.status === 404) return fail('This book is not in your library. <a class="underline" href="/">Back to the library</a>.');
+    if (!mr.ok || !tr.ok) return fail('Could not load this book (HTTP ' + (mr.ok ? tr.status : mr.status) + ').');
+    book = await mr.json();
+    const text = await tr.text();
 
     document.title = (book.title || 'Loudreader') + ' | Loudreader';
     $('bookTitle').textContent = book.title || 'Book';
-    $('bookMeta').textContent = [book.author, (book.total_words || 0).toLocaleString() + ' words',
-      '~' + fmtDur((book.total_words || 0) * SPW)].filter(Boolean).join(' · ');
     $('barTitle').textContent = book.title || '';
     if (book.cover_url) $('barCover').innerHTML = '<img src="' + esc(book.cover_url) + '" class="w-full h-full object-cover" alt="">';
+
+    build(text);
+    if (!N) return fail('This book has no readable text.');
+    $('bookMeta').textContent = [book.author, N.toLocaleString() + ' words',
+      '~' + fmtDur(N * SPW)].filter(Boolean).join(' · ');
     buildContents();
     $('bar').classList.remove('hidden');
 
     const rate = parseFloat(localStorage.getItem(RATE_KEY) || '1') || 1;
     $('rate').value = String(rate);
 
-    cur = Math.min(Math.max(0, book.cur_chunk || 0), Math.max(0, book.total_chunks - 1));
-    await loadChunk(cur, { word: book.cur_word || 0, autoplay: false, save: false });
+    curWord = Math.min(Math.max(0, book.cur_word || 0), N - 1);
+    setWord(curWord, true);
+    markSentence(sentenceOfWord(curWord));
+    updateGlobal();
   })();
 
-  function chunkMeta(i) { return (book.chunks || [])[i] || { words: 0, words_start: 0, chapter: null }; }
-  function updatePartUI() {
-    const m = chunkMeta(cur);
-    $('partInfo').textContent = 'Part ' + (cur + 1) + ' of ' + book.total_chunks;
-    $('chapterLabel').textContent = m.chapter || '';
-    $('barSub').textContent = [m.chapter, 'Part ' + (cur + 1) + '/' + book.total_chunks].filter(Boolean).join(' · ');
-  }
-
-  // ---------------- chunk text -> tokens, sentences, spans ----------------
-  function buildChunk(text) {
-    tokens = []; sentences = []; senMarked = []; activeIdx = -1;
-    let html = '';
-    (text || '').split(/\n\n+/).forEach(para => {
-      const ptoks = para.split(/\s+/).filter(Boolean);
-      if (!ptoks.length) return;
-      html += '<p>';
-      let sTokens = [], sStart = tokens.length;
-      ptoks.forEach(t => {
-        const i = tokens.length;
-        tokens.push(t);
-        html += '<span class="w" data-i="' + i + '">' + esc(t) + '</span> ';
-        sTokens.push(t);
-        if (/[.!?…]["'”’)\]]?$/.test(t) && sTokens.length >= 2) {
-          sentences.push({ startWord: sStart, tokens: sTokens, text: sTokens.join(' ') });
-          sTokens = []; sStart = tokens.length;
+  // ---------------- text -> paragraphs, sentences ----------------
+  function build(text) {
+    paraTokens = []; paraStart = []; paraEls = []; sentences = []; N = 0;
+    const frag = document.createDocumentFragment();
+    (text || '').split(/\n\n+/).forEach(par => {
+      const toks = par.split(/\s+/).filter(Boolean);
+      if (!toks.length) return;
+      const p = paraTokens.length;
+      paraTokens.push(toks);
+      paraStart.push(N);
+      let sOff = 0;
+      toks.forEach((t, k) => {
+        if (SENT_END.test(t) && k + 1 - sOff >= 2) {
+          sentences.push({ para: p, off: sOff, len: k + 1 - sOff, start: N + sOff });
+          sOff = k + 1;
         }
       });
-      if (sTokens.length) sentences.push({ startWord: sStart, tokens: sTokens, text: sTokens.join(' ') });
-      html += '</p>';
+      if (sOff < toks.length) sentences.push({ para: p, off: sOff, len: toks.length - sOff, start: N + sOff });
+      const el = document.createElement('p');
+      el.textContent = toks.join(' ');
+      el.dataset.p = p;
+      frag.appendChild(el);
+      paraEls.push(el);
+      N += toks.length;
     });
-    $('reader').innerHTML = html || '<p>&hellip;</p>';
-    spans = Array.from($('reader').querySelectorAll('.w'));
-    if (!sentences.length && tokens.length) sentences.push({ startWord: 0, tokens: tokens.slice(), text: tokens.join(' ') });
+    $('reader').textContent = '';
+    $('reader').appendChild(frag);
+  }
+  function paraOfWord(w) {
+    let lo = 0, hi = paraStart.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (paraStart[mid] <= w) lo = mid; else hi = mid - 1; }
+    return lo;
   }
   function sentenceOfWord(w) {
-    for (let i = sentences.length - 1; i >= 0; i--) if (sentences[i].startWord <= w) return i;
-    return 0;
+    let lo = 0, hi = sentences.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (sentences[mid].start <= w) lo = mid; else hi = mid - 1; }
+    return lo;
+  }
+  function chapterIndexOf(w) {
+    let k = -1;
+    (book.chapters || []).forEach((c, i) => { if ((c.word || 0) <= w) k = i; });
+    return k;
   }
 
-  async function loadChunk(i, opts) {
-    opts = opts || {};
-    if (!book || i < 0 || i >= book.total_chunks) return;
-    stopSpeech();
-    cur = i;
-    updatePartUI();
-    let text = nextText[i];
-    if (text == null) {
-      try { text = (await (await fetch(API + '/chunks/' + i)).json()).text; }
-      catch (e) { $('reader').innerHTML = '<p>Could not load this part.</p>'; return; }
-    }
-    delete nextText[i];
-    buildChunk(text);
-    curWord = Math.min(Math.max(0, opts.word || 0), Math.max(0, tokens.length - 1));
-    curSentence = sentenceOfWord(curWord);
-    setWord(curWord, true);
-    markSentence(curSentence);
-    updateGlobal();
-    if (opts.save !== false) savePos(true);
-    if (opts.autoplay) play();
-    const n = i + 1;
-    if (n < book.total_chunks && nextText[n] == null) {
-      fetch(API + '/chunks/' + n).then(r => r.json()).then(j => { nextText[n] = j.text; }).catch(() => {});
-    }
+  // ---------------- active paragraph spans ----------------
+  function activatePara(p) {
+    if (p === activePara) return;
+    if (activePara >= 0 && paraEls[activePara]) paraEls[activePara].textContent = paraTokens[activePara].join(' ');
+    activePara = p;
+    spans = []; onEl = null; senMarked = [];
+    const el = paraEls[p];
+    if (!el) return;
+    const frag = document.createDocumentFragment();
+    const base = paraStart[p];
+    paraTokens[p].forEach((t, k) => {
+      const sp = document.createElement('span');
+      sp.className = 'w';
+      sp.dataset.i = base + k;
+      sp.textContent = t;
+      frag.appendChild(sp);
+      frag.appendChild(document.createTextNode(' '));
+      spans.push(sp);
+    });
+    el.textContent = '';
+    el.appendChild(frag);
   }
 
   // ---------------- highlight ----------------
   function setWord(w, scroll) {
-    if (activeIdx >= 0 && spans[activeIdx]) spans[activeIdx].classList.remove('on');
-    activeIdx = w;
+    w = Math.min(Math.max(0, w), Math.max(0, N - 1));
     curWord = w;
-    const el = spans[w];
-    if (!el) return;
-    el.classList.add('on');
-    const rc = el.getBoundingClientRect();
-    if (scroll || rc.top < 110 || rc.bottom > window.innerHeight - 200) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const p = paraOfWord(w);
+    if (p !== activePara) activatePara(p);
+    if (onEl) onEl.classList.remove('on');
+    onEl = spans[w - paraStart[p]] || null;
+    if (!onEl) return;
+    onEl.classList.add('on');
+    const rc = onEl.getBoundingClientRect();
+    if (scroll || rc.top < 110 || rc.bottom > window.innerHeight - 200) {
+      const far = Math.abs(rc.top - window.innerHeight / 2) > window.innerHeight * 2;
+      onEl.scrollIntoView({ block: 'center', behavior: far ? 'auto' : 'smooth' });
+    }
   }
   function markSentence(si) {
-    senMarked.forEach(el => el.classList.remove('sen'));
-    senMarked = [];
     const s = sentences[si];
     if (!s) return;
-    for (let w = s.startWord; w < s.startWord + s.tokens.length; w++) {
-      if (spans[w]) { spans[w].classList.add('sen'); senMarked.push(spans[w]); }
+    activatePara(s.para);
+    senMarked.forEach(el => el.classList.remove('sen'));
+    senMarked = [];
+    for (let k = s.off; k < s.off + s.len; k++) {
+      if (spans[k]) { spans[k].classList.add('sen'); senMarked.push(spans[k]); }
     }
   }
 
@@ -296,11 +317,10 @@
   function speakSentence(si, fromTok, chain, attempt) {
     if (chain !== chainSeq || !speaking) return;
     const s = sentences[si];
-    if (!s) { onChunkDone(); return; }
-    curSentence = si;
+    if (!s) { onBookDone(); return; }
     markSentence(si);
-    fromTok = Math.min(Math.max(0, fromTok || 0), s.tokens.length - 1);
-    const toks = s.tokens.slice(fromTok);
+    fromTok = Math.min(Math.max(0, fromTok || 0), s.len - 1);
+    const toks = paraTokens[s.para].slice(s.off + fromTok, s.off + s.len);
     const text = toks.join(' ');
     const offs = []; let acc = 0;
     toks.forEach(t => { offs.push(acc); acc += t.length + 1; });
@@ -311,12 +331,12 @@
     u.rate = Math.min(4, parseFloat($('rate').value) || 1);
     let settled = false;
 
-    setWord(s.startWord + fromTok);
+    setWord(s.start + fromTok);
     u.onboundary = (e) => {
       if (settled || chain !== chainSeq || !e || typeof e.charIndex !== 'number') return;
       let k = 0;
       for (let j = offs.length - 1; j >= 0; j--) if (offs[j] <= e.charIndex) { k = j; break; }
-      setWord(s.startWord + fromTok + k);
+      setWord(s.start + fromTok + k);
       updateGlobal(); savePos(false);
     };
     u.onend = () => {
@@ -324,8 +344,7 @@
       settled = true;
       errStreak = 0;
       if (!speaking) return;
-      if (si + 1 < sentences.length) speakSentence(si + 1, 0, chain);
-      else onChunkDone();
+      advance(si, chain);
     };
     u.onerror = (e) => {
       if (settled || chain !== chainSeq) return;
@@ -340,23 +359,28 @@
         $('voiceWarn').classList.remove('hidden');
         return;
       }
-      if (speaking) { if (si + 1 < sentences.length) speakSentence(si + 1, 0, chain); else onChunkDone(); }
+      if (speaking) advance(si, chain);
     };
     currentUtterance = u;
     speechSynthesis.speak(u);
   }
 
-  function onChunkDone() {
-    if (sleepAtEnd) { sleepAtEnd = false; $('sleep').value = '0'; pause(); return; }
-    if (cur < book.total_chunks - 1) {
-      savePosData(cur + 1, 0, false, false, 0);
-      loadChunk(cur + 1, { word: 0, autoplay: true, save: false });
-    } else {
-      speaking = false;
-      setPlayIcon(false);
-      savePosData(cur, tokens.length * SPW, true, false, Math.max(0, tokens.length - 1));
-      $('chapterLabel').textContent = 'Finished — nicely done.';
+  function advance(si, chain) {
+    if (si + 1 >= sentences.length) { onBookDone(); return; }
+    if (sleepAtEnd && chapterIndexOf(sentences[si + 1].start) !== chapterIndexOf(sentences[si].start)) {
+      sleepAtEnd = false; $('sleep').value = '0';
+      setWord(sentences[si + 1].start);
+      pause();
+      return;
     }
+    speakSentence(si + 1, 0, chain);
+  }
+
+  function onBookDone() {
+    speaking = false;
+    setPlayIcon(false);
+    savePosData(Math.max(0, N - 1), true);
+    $('chapterLabel').textContent = 'Finished — nicely done.';
   }
 
   function stopSpeech() {
@@ -365,13 +389,13 @@
     try { speechSynthesis.cancel(); } catch (e) {}
   }
   function play() {
-    if (!window.speechSynthesis || !tokens.length) return;
+    if (!window.speechSynthesis || !N) return;
     speaking = true;
     setPlayIcon(true);
     stopSpeech();
     const chain = chainSeq;
     const si = sentenceOfWord(curWord);
-    setTimeout(() => { if (speaking && chain === chainSeq) speakSentence(si, curWord - sentences[si].startWord, chain); }, 60);
+    setTimeout(() => { if (speaking && chain === chainSeq) speakSentence(si, curWord - sentences[si].start, chain); }, 60);
   }
   function pause() {
     speaking = false;
@@ -384,7 +408,7 @@
 
   // ---------------- navigation ----------------
   function gotoWord(w, keepPlaying) {
-    w = Math.min(Math.max(0, w), Math.max(0, tokens.length - 1));
+    w = Math.min(Math.max(0, w), Math.max(0, N - 1));
     const wasSpeaking = keepPlaying != null ? keepPlaying : speaking;
     stopSpeech();
     speaking = false;
@@ -396,35 +420,48 @@
   }
   $('prevSen').addEventListener('click', () => {
     const si = sentenceOfWord(curWord);
-    const target = (curWord > sentences[si].startWord + 1 || si === 0) ? si : si - 1;
-    gotoWord(sentences[Math.max(0, target)].startWord);
+    const target = (curWord > sentences[si].start + 1 || si === 0) ? si : si - 1;
+    gotoWord(sentences[Math.max(0, target)].start);
   });
   $('nextSen').addEventListener('click', () => {
     const si = sentenceOfWord(curWord);
-    if (si + 1 < sentences.length) gotoWord(sentences[si + 1].startWord);
-    else if (cur < book.total_chunks - 1) loadChunk(cur + 1, { word: 0, autoplay: speaking });
+    if (si + 1 < sentences.length) gotoWord(sentences[si + 1].start);
   });
-  $('prevPart').addEventListener('click', () => { if (cur > 0) loadChunk(cur - 1, { word: 0, autoplay: speaking }); });
-  $('nextPart').addEventListener('click', () => { if (cur < book.total_chunks - 1) loadChunk(cur + 1, { word: 0, autoplay: speaking }); });
+  $('prevChap').addEventListener('click', () => {
+    const chs = book.chapters || [];
+    let target = null;
+    for (const c of chs) if ((c.word || 0) < curWord - 5) target = c.word || 0;
+    gotoWord(target != null ? target : Math.max(0, curWord - 1000));
+  });
+  $('nextChap').addEventListener('click', () => {
+    const chs = book.chapters || [];
+    const next = chs.find(c => (c.word || 0) > curWord);
+    gotoWord(next ? next.word : Math.min(N - 1, curWord + 1000));
+  });
   $('seek').addEventListener('input', () => {
-    const w = Math.round((+$('seek').value) / 1000 * Math.max(0, tokens.length - 1));
-    gotoWord(w, false);
+    gotoWord(Math.round((+$('seek').value) / 1000 * Math.max(0, N - 1)), false);
   });
   $('gwrap').addEventListener('click', (e) => {
     const rc = $('gwrap').getBoundingClientRect();
     const pct = Math.min(1, Math.max(0, (e.clientX - rc.left) / rc.width));
-    const target = pct * (book.total_words || 0);
-    let idx = 0;
-    (book.chunks || []).forEach(c => { if (c.words_start <= target) idx = c.idx; });
-    const m = chunkMeta(idx);
-    const w = Math.max(0, Math.round(target - m.words_start));
-    if (idx === cur) gotoWord(w);
-    else loadChunk(idx, { word: w, autoplay: speaking });
+    gotoWord(Math.round(pct * Math.max(0, N - 1)));
   });
   $('reader').addEventListener('click', (e) => {
     const sp = e.target.closest('.w');
-    if (!sp) return;
-    gotoWord(+sp.dataset.i, true);
+    if (sp) { gotoWord(+sp.dataset.i, true); return; }
+    const pe = e.target.closest('p');
+    if (!pe || pe.dataset.p == null) return;
+    const p = +pe.dataset.p;
+    // Plain paragraph: locate the clicked word via the caret position.
+    let off = 0;
+    const pos = document.caretPositionFromPoint ? document.caretPositionFromPoint(e.clientX, e.clientY)
+      : (document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null);
+    const node = pos && (pos.offsetNode || pos.startContainer);
+    if (node && node.nodeType === 3 && pe.contains(node)) off = (pos.offset != null ? pos.offset : pos.startOffset) || 0;
+    const toks = paraTokens[p];
+    let k = 0, acc = 0;
+    for (let j = 0; j < toks.length; j++) { if (off >= acc) k = j; acc += toks[j].length + 1; }
+    gotoWord(paraStart[p] + k, true);
   });
   $('rate').addEventListener('change', () => {
     localStorage.setItem(RATE_KEY, $('rate').value);
@@ -451,26 +488,34 @@
   });
 
   // ---------------- progress + persistence ----------------
+  function updateChapterUI() {
+    const chs = book.chapters || [];
+    const ci = chapterIndexOf(curWord);
+    const c = ci >= 0 ? chs[ci] : null;
+    $('chapInfo').textContent = c ? 'Chapter ' + (ci + 1) + ' of ' + chs.length : '';
+    $('chapterLabel').textContent = c ? c.title : '';
+    $('barSub').textContent = c ? c.title : '';
+  }
   function updateGlobal() {
-    if (!book) return;
-    const m = chunkMeta(cur);
-    const total = Math.max(1, book.total_words || 1);
-    const done = (m.words_start || 0) + curWord;
+    if (!book || !N) return;
+    const total = Math.max(1, N);
+    const done = curWord;
     $('gbar').style.width = Math.min(100, done / total * 100) + '%';
     const rate = parseFloat($('rate').value) || 1;
     let leftTxt = '~' + fmtDur((total - done) * SPW / rate) + ' left';
     if (sleepUntil) leftTxt += ' · sleep ' + fmtDur((sleepUntil - Date.now()) / 1000);
-    else if (sleepAtEnd) leftTxt += ' · sleep at part end';
+    else if (sleepAtEnd) leftTxt += ' · sleep at chapter end';
     $('left').textContent = Math.round(done / total * 100) + '% · ' + leftTxt;
-    $('cur').textContent = tokens.length ? Math.round(curWord / Math.max(1, tokens.length - 1) * 100) + '%' : '0%';
-    $('dur').textContent = 'part ~' + fmtDur(tokens.length * SPW / rate);
-    if (tokens.length) $('seek').value = String(Math.round(curWord / Math.max(1, tokens.length - 1) * 1000));
+    $('cur').textContent = fmtDur(done * SPW / rate);
+    $('dur').textContent = fmtDur(total * SPW / rate);
+    $('seek').value = String(Math.round(done / Math.max(1, N - 1) * 1000));
+    updateChapterUI();
     if (sleepUntil && Date.now() >= sleepUntil) { sleepUntil = 0; $('sleep').value = '0'; pause(); }
   }
-  function savePosData(chunk, seconds, finished, beacon, word) {
+  function savePosData(word, finished, beacon) {
     const opts = {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chunk: chunk, seconds: seconds || 0, word: word || 0, finished: !!finished }),
+      body: JSON.stringify({ word: word || 0, finished: !!finished }),
     };
     if (beacon) opts.keepalive = true;
     fetch(API + '/position', opts).catch(() => {});
@@ -479,7 +524,7 @@
     const now = Date.now();
     if (!force && now - lastSave < 3000) return;
     lastSave = now;
-    savePosData(cur, curWord * SPW, false, beacon, curWord);
+    savePosData(curWord, false, beacon);
   }
   // Heartbeat: engines without boundary events would otherwise never save
   // while speaking.
@@ -493,24 +538,23 @@
     const chs = book.chapters || [];
     if (chs.length) {
       box.innerHTML = chs.map(c => {
-        const w = chunkMeta(c.chunk).words_start || 0;
-        const pct = Math.round(w / Math.max(1, book.total_words) * 100);
-        return '<div class="px-2 py-2 rounded hover:bg-slate-100 cursor-pointer flex justify-between gap-3" data-goto="' + c.chunk + '">'
+        const pct = Math.round((c.word || 0) / Math.max(1, N) * 100);
+        return '<div class="px-2 py-2 rounded hover:bg-slate-100 cursor-pointer flex justify-between gap-3" data-gotow="' + (c.word || 0) + '">'
           + '<span class="min-w-0 truncate">' + esc(c.title) + '</span>'
           + '<span class="text-xs text-slate-400 shrink-0">' + pct + '%</span></div>';
       }).join('');
     } else {
-      box.innerHTML = '<div class="px-2 pb-2 text-xs text-slate-400">No chapters detected — parts instead.</div>'
+      box.innerHTML = '<div class="px-2 pb-2 text-xs text-slate-400">No chapters detected — jump by position instead.</div>'
         + '<div class="grid grid-cols-5 gap-1 px-2">'
-        + (book.chunks || []).map(c => '<button type="button" class="border border-slate-200 rounded py-1 text-xs hover:bg-slate-100" data-goto="' + c.idx + '">' + (c.idx + 1) + '</button>').join('')
+        + Array.from({ length: 10 }, (_, i) => '<button type="button" class="border border-slate-200 rounded py-1 text-xs hover:bg-slate-100" data-gotow="' + Math.round(i / 10 * N) + '">' + (i * 10) + '%</button>').join('')
         + '</div>';
     }
   }
   $('chapBtn').addEventListener('click', () => $('chap').classList.remove('hidden'));
   $('chap').addEventListener('click', (e) => {
     if (e.target.closest('[data-chapclose]')) { $('chap').classList.add('hidden'); return; }
-    const go = e.target.closest('[data-goto]');
-    if (go) { $('chap').classList.add('hidden'); loadChunk(+go.dataset.goto, { word: 0, autoplay: speaking }); }
+    const go = e.target.closest('[data-gotow]');
+    if (go) { $('chap').classList.add('hidden'); gotoWord(+go.dataset.gotow); }
   });
 </script>
 </body>

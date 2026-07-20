@@ -1,7 +1,7 @@
-"""Book preparation: extract, clean, chapterize, chunk.
+"""Book preparation: extract, clean, chapterize.
 
 Turns an uploaded document (PDF / EPUB / Markdown / TXT, or pasted text) into
-clean TTS-ready chunks of ~TARGET_WORDS words plus a chapter map and a cover
+one clean TTS-ready text plus a chapter map (global word offsets) and a cover
 image. Everything is CPU-only and stateless; the API stores the result in
 Postgres and the browser does the speaking.
 
@@ -11,8 +11,8 @@ Cleanup deals with the artifacts that ruin narration:
   - EPUB: scripts/styles/nav, <sup> footnote markers.
   - everywhere: [12]-style citation markers, soft hyphens, control chars.
 
-Chapter starts always begin a new chunk, so jumping to a chapter is jumping to
-a chunk. Heading text is kept in the chunk (narrated, like an audiobook).
+Heading text is kept in the text (narrated, like an audiobook); chapters point
+at the word offset where their heading starts.
 """
 
 from __future__ import annotations
@@ -24,9 +24,6 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-TARGET_WORDS = 900   # ~7 min of audio per chunk at Kokoro's ~125 wpm
-MAX_WORDS = 1200     # hard cap; a single paragraph longer than this is split
-MIN_WORDS = 200      # don't close a chunk earlier than this unless forced
 MAX_CHARS = 5_000_000  # safety cap on extracted text (~800k words)
 
 # (kind, text, level): kind "h" = heading (level 1..4), "p" = paragraph (level 0)
@@ -333,70 +330,29 @@ def _txt_blocks(raw: str) -> list[Block]:
 
 
 # ---------------------------------------------------------------------------
-# Chunking
+# Assembly
 # ---------------------------------------------------------------------------
 
-def _split_long(text: str) -> list[str]:
-    """Split a paragraph longer than MAX_WORDS at sentence boundaries."""
-    if _wc(text) <= MAX_WORDS:
-        return [text]
-    out: list[str] = []
-    cur: list[str] = []
-    cur_w = 0
-    for s in re.split(r"(?<=[.!?…])\s+", text):
-        w = _wc(s)
-        if cur_w and cur_w + w > TARGET_WORDS:
-            out.append(" ".join(cur))
-            cur, cur_w = [], 0
-        cur.append(s)
-        cur_w += w
-    if cur:
-        out.append(" ".join(cur))
-    return out
+def _assemble(blocks: list[Block]) -> tuple[str, int, list[dict]]:
+    """Join blocks into one text; chapter headings become word offsets.
 
-
-def _chunk_blocks(blocks: list[Block]) -> tuple[list[dict], list[dict]]:
-    """Pack blocks into chunks; chapter headings force a chunk boundary.
-
-    Returns (chunks, chapters) where chunks[i] = {text, words, chapter} and
-    chapters = [{title, chunk}]. `chapter` on a chunk is the active chapter
-    title (for the player's "current chapter" label).
+    Returns (text, total_words, chapters) with chapters = [{title, word}],
+    `word` being the global word index where the heading is narrated.
     """
-    chunks: list[dict] = []
+    paras: list[str] = []
     chapters: list[dict] = []
-    cur: list[str] = []
-    cur_w = 0
-    active_chapter: str | None = None
-
-    def close():
-        nonlocal cur, cur_w
-        if cur:
-            chunks.append({"text": "\n\n".join(cur), "words": cur_w, "chapter": active_chapter})
-            cur, cur_w = [], 0
-
+    words = 0
     for kind, text, level in blocks:
         if kind == "h" and level <= 2:
-            close()
-            active_chapter = text[:200]
-            if not chapters or chapters[-1]["chunk"] != len(chunks):
-                chapters.append({"title": active_chapter, "chunk": len(chunks)})
+            if not chapters or chapters[-1]["word"] != words:
+                chapters.append({"title": text[:200], "word": words})
             else:
                 # Two headings back to back (Part I / Chapter 1): keep both in
-                # the label but a single chapter entry per chunk.
-                chapters[-1]["title"] = (chapters[-1]["title"] + " — " + active_chapter)[:200]
-            cur.append(text)
-            cur_w += _wc(text)
-            continue
-        for piece in _split_long(text) if kind == "p" else [text]:
-            w = _wc(piece)
-            if cur_w and cur_w + w > TARGET_WORDS and (cur_w >= MIN_WORDS or cur_w + w > MAX_WORDS):
-                close()
-            cur.append(piece)
-            cur_w += w
-    close()
-
-    chapters = [c for c in chapters if c["chunk"] < len(chunks)]
-    return chunks, chapters
+                # the label but a single chapter entry per offset.
+                chapters[-1]["title"] = (chapters[-1]["title"] + " — " + text[:200])[:200]
+        paras.append(text)
+        words += _wc(text)
+    return "\n\n".join(paras), words, chapters
 
 
 # ---------------------------------------------------------------------------
@@ -409,11 +365,11 @@ def prepare_book(
     text: str | None = None,
     title_hint: str | None = None,
 ) -> dict:
-    """Extract + clean + chunk a document (or pasted text) for audiobook use.
+    """Extract + clean a document (or pasted text) for audiobook use.
 
     Returns a JSON-safe dict:
-      {title, author, cover_b64, cover_mime, total_words,
-       chunks: [{idx, words, chapter, text}], chapters: [{title, chunk}]}
+      {title, author, cover_b64, cover_mime, total_words, text,
+       chapters: [{title, word}]}
     """
     title = author = None
     cover = cover_mime = None
@@ -436,32 +392,16 @@ def prepare_book(
             snippet = " ".join((text or "").split())[:60].strip()
             title = title_hint or snippet or "pasted text"
 
-    chunks, chapters = _chunk_blocks(blocks)
-    if not chunks:
+    full_text, total_words, chapters = _assemble(blocks)
+    if not total_words:
         raise ValueError("No narratable text found in the document.")
-
-    # Cumulative word offsets let the UI compute global progress cheaply.
-    start = 0
-    out_chunks = []
-    for i, c in enumerate(chunks):
-        out_chunks.append(
-            {
-                "idx": i,
-                "words": c["words"],
-                "words_start": start,
-                "chapter": c["chapter"],
-                "text": c["text"],
-            }
-        )
-        start += c["words"]
 
     return {
         "title": (title_hint or title or "book")[:500],
         "author": (author or "")[:500] or None,
         "cover_b64": base64.b64encode(cover).decode() if cover else None,
         "cover_mime": cover_mime,
-        "total_words": start,
-        "total_chunks": len(out_chunks),
+        "total_words": total_words,
+        "text": full_text,
         "chapters": chapters,
-        "chunks": out_chunks,
     }

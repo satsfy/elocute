@@ -31,7 +31,7 @@
     <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
       <section class="mb-8">
         <h1 class="text-3xl font-semibold mb-2">Listen to any PDF as an audiobook for free.</h1>
-        <p class="text-slate-600"> Upload a PDF, EPUB, Markdown or paste text. Loudreader extracts and cleans the text, splits it into parts, and then your browser's built-in TTS reads it with live word highlighting like an audiobook. You can optionally sign up to save the books you uploaded across sessions and devices, with automatic progress saving.
+        <p class="text-slate-600"> Upload a PDF, EPUB, Markdown or paste text. Loudreader extracts and cleans the text, and then your browser's built-in TTS reads it with live word highlighting like an audiobook. You can optionally sign up to save the books you uploaded across sessions and devices, with automatic progress saving.
         </p>
       </section>
 
@@ -359,10 +359,7 @@
         );
       }
       function bookCard(it) {
-        const done =
-          (it.cur_words_start || 0) +
-          Math.min(1, (it.cur_word || 0) / Math.max(1, it.cur_word_count || 1)) *
-            (it.cur_word_count || 0);
+        const done = Math.min(it.cur_word || 0, it.total_words || 0);
         const pct = it.finished
           ? 100
           : Math.min(100, Math.round((done / Math.max(1, it.total_words)) * 100));

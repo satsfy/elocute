@@ -1,7 +1,10 @@
 """Loudreader: Listen to audiobooks as your browser read them.
 
-Upload a PDF, EPUB, Markdown or TXT. Loudreader extracts and
-cleans the text, splits it into parts, and then **your browser's TTS reads it** with live word highlighting, audiobook-style player. You can optionally signup to save the books you uploded across sessions and device, with automatic progress saving.
+Upload a PDF, EPUB, Markdown or TXT. Loudreader extracts and cleans the text,
+and then **your browser's TTS reads it** with live word highlighting,
+audiobook-style player. Each book is stored as one continuous text; positions
+and chapters are global word offsets. You can optionally signup to save the
+books you uploaded across sessions and devices, with automatic progress saving.
 """
 
 from __future__ import annotations
@@ -14,8 +17,9 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from backend import auth, bookprep, db
@@ -28,6 +32,7 @@ MAX_UPLOAD = 80 * 1024 * 1024
 _ID_RE = re.compile(r"^[0-9a-f-]{32,36}$")
 
 app = FastAPI(title="Loudreader", docs_url=None, redoc_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=2048)  # book text is MBs of very compressible prose
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("SECRET_KEY", "dev-insecure"),
@@ -201,7 +206,7 @@ async def import_book(request: Request):
             c.execute(
                 """
                 INSERT INTO books (id, user_id, anon_id, title, author, source_name,
-                                   total_words, total_chunks, chapters, cover, cover_mime)
+                                   total_words, chapters, text_content, cover, cover_mime)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
@@ -212,33 +217,15 @@ async def import_book(request: Request):
                     doc.get("author"),
                     source_name,
                     doc.get("total_words") or 0,
-                    doc.get("total_chunks") or 0,
                     json.dumps(doc.get("chapters") or []),
+                    doc.get("text") or "",
                     cover,
                     doc.get("cover_mime"),
                 ),
             )
-            with c.cursor() as cur:
-                cur.executemany(
-                    """
-                    INSERT INTO chunks (book_id, idx, word_count, words_start, chapter, text_content)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    [
-                        (
-                            book_id,
-                            ch["idx"],
-                            ch.get("words") or 0,
-                            ch.get("words_start") or 0,
-                            (ch.get("chapter") or None),
-                            ch.get("text") or "",
-                        )
-                        for ch in doc.get("chunks", [])
-                    ],
-                )
     except RuntimeError:
         return _dbfail()
-    return {"id": book_id, "chunks": doc.get("total_chunks"), "words": doc.get("total_words")}
+    return {"id": book_id, "words": doc.get("total_words")}
 
 
 @app.post("/api/demo")
@@ -257,7 +244,7 @@ def import_demo(request: Request):
             c.execute(
                 """
                 INSERT INTO books (id, user_id, anon_id, title, author, source_name,
-                                   total_words, total_chunks, chapters)
+                                   total_words, chapters, text_content)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
@@ -268,22 +255,10 @@ def import_demo(request: Request):
                     None,
                     "sample",
                     doc.get("total_words") or 0,
-                    doc.get("total_chunks") or 0,
                     json.dumps(doc.get("chapters") or []),
+                    doc.get("text") or "",
                 ),
             )
-            with c.cursor() as cur:
-                cur.executemany(
-                    """
-                    INSERT INTO chunks (book_id, idx, word_count, words_start, chapter, text_content)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    [
-                        (book_id, ch["idx"], ch.get("words") or 0, ch.get("words_start") or 0,
-                         ch.get("chapter") or None, ch.get("text") or "")
-                        for ch in doc.get("chunks", [])
-                    ],
-                )
     except RuntimeError:
         return _dbfail()
     return {"id": book_id}
@@ -300,16 +275,13 @@ def list_books(request: Request):
         with db.conn() as c:
             rows = c.execute(
                 f"""
-                SELECT b.id, b.title, b.author, b.total_words, b.total_chunks,
-                       b.cur_chunk, b.cur_seconds, b.cur_word, b.finished,
-                       (b.cover IS NOT NULL) AS has_cover,
-                       EXTRACT(EPOCH FROM b.created_at) AS created_ts,
-                       EXTRACT(EPOCH FROM b.last_read_at) AS last_read_ts,
-                       c2.words_start AS cur_words_start, c2.word_count AS cur_word_count
-                FROM books b
-                LEFT JOIN chunks c2 ON c2.book_id = b.id AND c2.idx = b.cur_chunk
+                SELECT id, title, author, total_words, cur_word, finished,
+                       (cover IS NOT NULL) AS has_cover,
+                       EXTRACT(EPOCH FROM created_at) AS created_ts,
+                       EXTRACT(EPOCH FROM last_read_at) AS last_read_ts
+                FROM books
                 WHERE {where}
-                ORDER BY COALESCE(b.last_read_at, b.created_at) DESC
+                ORDER BY COALESCE(last_read_at, created_at) DESC
                 """,
                 params,
             ).fetchall()
@@ -324,30 +296,16 @@ def list_books(request: Request):
                 "title": r[1],
                 "author": r[2],
                 "total_words": r[3] or 0,
-                "total_chunks": r[4] or 0,
-                "cur_chunk": r[5] or 0,
-                "cur_seconds": r[6] or 0,
-                "cur_word": r[7] or 0,
-                "finished": bool(r[8]),
-                "has_cover": bool(r[9]),
-                "created_at": float(r[10] or 0),
-                "last_read_at": float(r[11]) if r[11] else None,
-                "cur_words_start": r[12] or 0,
-                "cur_word_count": r[13] or 0,
+                "cur_word": r[4] or 0,
+                "finished": bool(r[5]),
+                "has_cover": bool(r[6]),
+                "created_at": float(r[7] or 0),
+                "last_read_at": float(r[8]) if r[8] else None,
                 "url": f"/b/{bid}",
-                "cover_url": f"/api/books/{bid}/cover" if r[9] else None,
+                "cover_url": f"/api/books/{bid}/cover" if r[6] else None,
             }
         )
     return {"items": items}
-
-
-def _own_book(c, request: Request, book_id: str):
-    where, params = auth.owner_where(request)
-    row = c.execute(
-        f"SELECT id FROM books WHERE id = %s AND {where}", [book_id, *params]
-    ).fetchone()
-    if row is None:
-        raise HTTPException(404, "Book not found")
 
 
 @app.get("/api/books/{book_id}")
@@ -358,43 +316,28 @@ def book_detail(book_id: str, request: Request):
         with db.conn() as c:
             r = c.execute(
                 f"""
-                SELECT id, title, author, source_name, total_words, total_chunks,
-                       chapters, (cover IS NOT NULL), cur_chunk, cur_seconds,
-                       cur_word, finished
+                SELECT id, title, author, source_name, total_words, chapters,
+                       (cover IS NOT NULL), cur_word, finished
                 FROM books WHERE id = %s AND {where}
                 """,
                 [book_id, *params],
             ).fetchone()
             if r is None:
                 raise HTTPException(404, "Book not found")
-            crows = c.execute(
-                """
-                SELECT idx, word_count, words_start, chapter
-                FROM chunks WHERE book_id = %s ORDER BY idx
-                """,
-                (book_id,),
-            ).fetchall()
     except RuntimeError:
         return _dbfail()
-    chapters = r[6] if isinstance(r[6], list) else json.loads(r[6] or "[]")
+    chapters = r[5] if isinstance(r[5], list) else json.loads(r[5] or "[]")
     return {
         "id": str(r[0]),
         "title": r[1],
         "author": r[2],
         "source_name": r[3],
         "total_words": r[4] or 0,
-        "total_chunks": r[5] or 0,
         "chapters": chapters,
-        "has_cover": bool(r[7]),
-        "cover_url": f"/api/books/{book_id}/cover" if r[7] else None,
-        "cur_chunk": r[8] or 0,
-        "cur_seconds": r[9] or 0,
-        "cur_word": r[10] or 0,
-        "finished": bool(r[11]),
-        "chunks": [
-            {"idx": cr[0], "words": cr[1], "words_start": cr[2], "chapter": cr[3]}
-            for cr in crows
-        ],
+        "has_cover": bool(r[6]),
+        "cover_url": f"/api/books/{book_id}/cover" if r[6] else None,
+        "cur_word": r[7] or 0,
+        "finished": bool(r[8]),
     }
 
 
@@ -419,24 +362,22 @@ def book_cover(book_id: str, request: Request):
     )
 
 
-@app.get("/api/books/{book_id}/chunks/{idx}")
-def chunk_text(book_id: str, idx: int, request: Request):
+@app.get("/api/books/{book_id}/text")
+def book_text(book_id: str, request: Request):
+    """The whole book as one plain-text response (gzipped by middleware)."""
     _check_id(book_id)
+    where, params = auth.owner_where(request)
     try:
         with db.conn() as c:
-            _own_book(c, request, book_id)
             r = c.execute(
-                """
-                SELECT idx, word_count, words_start, chapter, text_content
-                FROM chunks WHERE book_id = %s AND idx = %s
-                """,
-                (book_id, idx),
+                f"SELECT text_content FROM books WHERE id = %s AND {where}",
+                [book_id, *params],
             ).fetchone()
     except RuntimeError:
         return _dbfail()
     if r is None:
-        raise HTTPException(404, "Part not found")
-    return {"idx": r[0], "words": r[1], "words_start": r[2], "chapter": r[3], "text": r[4]}
+        raise HTTPException(404, "Book not found")
+    return PlainTextResponse(r[0] or "", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.patch("/api/books/{book_id}/position")
@@ -444,8 +385,6 @@ async def save_position(book_id: str, request: Request):
     _check_id(book_id)
     body = await request.json()
     try:
-        chunk = max(0, int(body.get("chunk", 0)))
-        seconds = max(0.0, float(body.get("seconds", 0)))
         word = max(0, int(body.get("word", 0)))
     except (TypeError, ValueError):
         raise HTTPException(400, "Bad position")
@@ -456,11 +395,10 @@ async def save_position(book_id: str, request: Request):
             c.execute(
                 f"""
                 UPDATE books
-                SET cur_chunk = %s, cur_seconds = %s, cur_word = %s, finished = %s,
-                    last_read_at = now()
+                SET cur_word = %s, finished = %s, last_read_at = now()
                 WHERE id = %s AND {where}
                 """,
-                [chunk, seconds, word, finished, book_id, *params],
+                [word, finished, book_id, *params],
             )
     except RuntimeError:
         return _dbfail()

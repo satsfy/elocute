@@ -8,6 +8,7 @@ already exist.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import contextmanager
@@ -32,12 +33,10 @@ CREATE TABLE IF NOT EXISTS books (
     author TEXT,
     source_name TEXT,
     total_words INT DEFAULT 0,
-    total_chunks INT DEFAULT 0,
     chapters JSONB DEFAULT '[]'::jsonb,
+    text_content TEXT,
     cover BYTEA,
     cover_mime TEXT,
-    cur_chunk INT DEFAULT 0,
-    cur_seconds REAL DEFAULT 0,
     cur_word INT DEFAULT 0,
     finished BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT now(),
@@ -45,17 +44,42 @@ CREATE TABLE IF NOT EXISTS books (
 );
 CREATE INDEX IF NOT EXISTS idx_books_user ON books (user_id);
 CREATE INDEX IF NOT EXISTS idx_books_anon ON books (anon_id);
-
-CREATE TABLE IF NOT EXISTS chunks (
-    book_id UUID REFERENCES books(id) ON DELETE CASCADE,
-    idx INT NOT NULL,
-    word_count INT DEFAULT 0,
-    words_start INT DEFAULT 0,
-    chapter TEXT,
-    text_content TEXT,
-    PRIMARY KEY (book_id, idx)
-);
 """
+
+
+def _migrate(conn) -> None:
+    """One-shot fold of the legacy chunked layout into books.text_content.
+
+    Positions and chapter pointers move from (chunk idx, word-in-chunk) to a
+    single global word offset. No-op once the chunks table is gone.
+    """
+    if conn.execute("SELECT to_regclass('public.chunks')").fetchone()[0] is None:
+        return
+    conn.execute("ALTER TABLE books ADD COLUMN IF NOT EXISTS text_content TEXT")
+    books = conn.execute(
+        "SELECT id, COALESCE(cur_chunk, 0), COALESCE(cur_word, 0), chapters FROM books"
+    ).fetchall()
+    for book_id, cur_chunk, cur_word, chapters in books:
+        rows = conn.execute(
+            "SELECT idx, words_start, text_content FROM chunks WHERE book_id = %s ORDER BY idx",
+            (book_id,),
+        ).fetchall()
+        if not rows:
+            continue
+        starts = {idx: ws or 0 for idx, ws, _ in rows}
+        text = "\n\n".join(t or "" for _, _, t in rows)
+        word = starts.get(cur_chunk, 0) + cur_word
+        chs = chapters if isinstance(chapters, list) else json.loads(chapters or "[]")
+        chs = [{"title": c.get("title"), "word": starts.get(c.get("chunk"), 0)} for c in chs]
+        conn.execute(
+            "UPDATE books SET text_content = %s, cur_word = %s, chapters = %s WHERE id = %s",
+            (text, word, json.dumps(chs), book_id),
+        )
+    conn.execute("DROP TABLE chunks")
+    conn.execute("ALTER TABLE books DROP COLUMN IF EXISTS total_chunks")
+    conn.execute("ALTER TABLE books DROP COLUMN IF EXISTS cur_chunk")
+    conn.execute("ALTER TABLE books DROP COLUMN IF EXISTS cur_seconds")
+    log.info("migrated legacy chunked books to continuous text")
 
 
 def init() -> None:
@@ -71,6 +95,7 @@ def init() -> None:
         _pool = ConnectionPool(url, min_size=1, max_size=8, open=True, timeout=10)
         with _pool.connection() as conn:
             conn.execute(SCHEMA)
+            _migrate(conn)
         log.info("database ready")
     except Exception as exc:
         log.error("database unavailable at startup: %s", exc)
