@@ -29,6 +29,9 @@ log = logging.getLogger("loudreader")
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 MAX_UPLOAD = 80 * 1024 * 1024
+STORAGE_CAP = 5 * 1024**3  # total text+cover bytes across all users except the owner
+OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "renatobritto@protonmail.com")
+BASE_URL = os.environ.get("BASE_URL", "https://loudreader.satsfy.xyz")
 _ID_RE = re.compile(r"^[0-9a-f-]{32,36}$")
 
 app = FastAPI(title="Loudreader", docs_url=None, redoc_url=None)
@@ -77,6 +80,52 @@ def index_page():
 def reader_page(book_id: str):
     _check_id(book_id)
     return FileResponse(str(FRONTEND / "reader.html"))
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    return PlainTextResponse(
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /api/\n"
+        "Disallow: /b/\n"
+        "\n"
+        f"Sitemap: {BASE_URL}/sitemap.xml\n"
+    )
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    return Response(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<url><loc>{BASE_URL}/</loc><changefreq>weekly</changefreq></url>"
+        "</urlset>",
+        media_type="application/xml",
+    )
+
+
+@app.get("/llms.txt")
+def llms_txt():
+    """Plain-language summary for AI crawlers/assistants (llms.txt convention)."""
+    return PlainTextResponse(
+        "# Loudreader\n"
+        "\n"
+        "> Free browser text-to-speech audiobook reader. Upload a PDF, EPUB,\n"
+        "> Markdown or TXT (or paste text) and your browser reads it aloud with\n"
+        "> live word highlighting, chapters, speed control up to 4x, a sleep\n"
+        "> timer and automatic progress saving.\n"
+        "\n"
+        f"- Website: {BASE_URL}/\n"
+        "- Price: free, no ads, no account required\n"
+        "- An optional email account syncs books and reading position across devices\n"
+        "- Formats: PDF, EPUB, Markdown, TXT, pasted text (max 80 MB)\n"
+        "- Speech is generated on-device by the browser's Web Speech API; the\n"
+        "  server stores only extracted text, never audio\n"
+        "- Voice quality depends on the browser: Edge and Android ship the best\n"
+        "  free voices, Chrome desktop is decent, Linux browsers use espeak\n"
+        "- Source code: https://github.com/satsfy/loudreader\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +213,32 @@ def logout(request: Request):
 # Import
 # ---------------------------------------------------------------------------
 
+def _enforce_storage_cap(c) -> None:
+    """Keep everyone-but-the-owner's books under STORAGE_CAP.
+
+    Walks books newest-first and deletes the tail once the running byte total
+    passes the cap, so a flood of junk uploads evicts the oldest entries
+    instead of filling the database. The owner's books are never counted or
+    evicted."""
+    c.execute(
+        """
+        DELETE FROM books WHERE id IN (
+            SELECT id FROM (
+                SELECT b.id,
+                       SUM(octet_length(COALESCE(b.text_content, ''))
+                           + COALESCE(octet_length(b.cover), 0))
+                           OVER (ORDER BY b.created_at DESC, b.id) AS newest_first_bytes
+                FROM books b
+                LEFT JOIN users u ON u.id = b.user_id
+                WHERE u.email IS DISTINCT FROM %s
+            ) t
+            WHERE newest_first_bytes > %s
+        )
+        """,
+        (OWNER_EMAIL, STORAGE_CAP),
+    )
+
+
 @app.post("/api/import")
 async def import_book(request: Request):
     form = await request.form()
@@ -223,6 +298,7 @@ async def import_book(request: Request):
                     doc.get("cover_mime"),
                 ),
             )
+            _enforce_storage_cap(c)
     except RuntimeError:
         return _dbfail()
     return {"id": book_id, "words": doc.get("total_words")}
@@ -259,6 +335,7 @@ def import_demo(request: Request):
                     doc.get("text") or "",
                 ),
             )
+            _enforce_storage_cap(c)
     except RuntimeError:
         return _dbfail()
     return {"id": book_id}

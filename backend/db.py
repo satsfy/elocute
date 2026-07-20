@@ -116,13 +116,17 @@ def ok() -> bool:
 @contextmanager
 def conn():
     """Checkout a connection; raises RuntimeError('db down') when unavailable
-    so endpoints can map it to a 503."""
+    so endpoints can map it to a 503.
+
+    Only database errors are translated; anything else (e.g. an HTTPException
+    raised by endpoint code inside the block) propagates untouched, otherwise
+    a 404/409 would surface as a bogus 503."""
     if _pool is None:
         raise RuntimeError("db down")
+    import psycopg
+
     try:
         with _pool.connection() as c:
             yield c
-    except RuntimeError:
-        raise
-    except Exception as exc:
+    except (psycopg.Error, OSError) as exc:
         raise RuntimeError("db down") from exc
