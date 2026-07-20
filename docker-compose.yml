@@ -1,8 +1,3 @@
-# Loudreader on serverD, public via serverD's fleet-d cloudflared tunnel
-# (loudreader.satsfy.xyz -> http://localhost:10125).
-#
-#   rsync repo (incl. .env) to serverD:/home/renato/loudreader
-#   ssh serverD "cd loudreader && docker compose up -d --build"
 services:
   loudreader:
     build: .
