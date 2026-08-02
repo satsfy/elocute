@@ -353,15 +353,20 @@
     }
   }
   function batchEnd(si) {
-    // Group consecutive sentences of one paragraph into a single utterance of
-    // roughly ~10s of audio at the current rate. Per-utterance engine startup
-    // gaps are fixed-cost, so short sentence-sized utterances make high rates
-    // feel much slower than advertised.
+    // Group consecutive sentences into a single utterance of roughly ~10s of
+    // audio at the current rate. Per-utterance engine startup gaps are
+    // fixed-cost (process spawn + model load can be ~0.5s), so short
+    // utterances make high rates feel much slower than advertised. Batches
+    // cross paragraph boundaries freely - highlight code switches paragraphs
+    // on its own - and stop only at chapter boundaries, which the sleep
+    // timer's end-of-chapter check relies on.
     const rate = wantedRate();
     const budget = Math.max(24, Math.round(rate * 10 / SPW));
-    const p = sentences[si].para;
+    const chap = chapterIndexOf(sentences[si].start);
     let sj = si, words = sentences[si].len;
-    while (sj + 1 < sentences.length && sentences[sj + 1].para === p && words + sentences[sj + 1].len <= budget) {
+    while (sj + 1 < sentences.length
+        && chapterIndexOf(sentences[sj + 1].start) === chap
+        && words + sentences[sj + 1].len <= budget) {
       sj++; words += sentences[sj].len;
     }
     return sj;
@@ -374,8 +379,12 @@
     markSentence(si);
     fromTok = Math.min(Math.max(0, fromTok || 0), s.len - 1);
     const sj = batchEnd(si);
-    const last = sentences[sj];
-    const toks = paraTokens[s.para].slice(s.off + fromTok, last.off + last.len);
+    const toks = [];
+    for (let k = si; k <= sj; k++) {
+      const sen = sentences[k];
+      const from = (k === si) ? sen.off + fromTok : sen.off;
+      for (let t = from; t < sen.off + sen.len; t++) toks.push(paraTokens[sen.para][t]);
+    }
     const text = toks.join(' ');
     const offs = []; let acc = 0;
     toks.forEach(t => { offs.push(acc); acc += t.length + 1; });
