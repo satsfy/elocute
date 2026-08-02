@@ -119,7 +119,7 @@ def llms_txt():
         "\n"
         "> Free browser text-to-speech audiobook reader. Upload a PDF, EPUB,\n"
         "> Markdown or TXT (or paste text) and your browser reads it aloud with\n"
-        "> live word highlighting, chapters, speed control up to 4x, a sleep\n"
+        "> live word highlighting, chapters, speed control up to 8x, a sleep\n"
         "> timer and automatic progress saving.\n"
         "\n"
         f"- Website: {BASE_URL}/\n"

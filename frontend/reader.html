@@ -93,6 +93,9 @@
             <option value="3">3&times;</option>
             <option value="3.5">3.5&times;</option>
             <option value="4">4&times;</option>
+            <option value="5">5&times;</option>
+            <option value="6">6&times;</option>
+            <option value="8">8&times;</option>
           </select>
           <select id="sleep" class="border border-slate-800 rounded p-1.5 bg-slate-900" title="Sleep timer">
             <option value="0">Sleep: off</option>
@@ -319,12 +322,42 @@
   }
 
   // ---------------- speech engine ----------------
+  // utterance.rate alone cannot express high speeds on Linux: Firefox clamps
+  // it to 2.5 and Chromium to 3 before translating to speech-dispatcher's
+  // -100..100 rate, so every dial position above ~2.5x collapses into the
+  // same saturated value. Our piper speechd wrapper therefore decodes rate
+  // as 2.5^(spd/100) and reads the pitch channel (unused, piper has no
+  // pitch control) as an extra speed factor 4^(spd_pitch/100). For piper
+  // voices we split the wanted speed across both channels, encoded per
+  // browser since their spd mappings differ; other voices get plain rate.
+  const PIPER_NAME = /^[a-z]{2}_[A-Z]{2}-[A-Za-z0-9_]+-(x_low|low|medium|high)$/;
+  const IS_CHROMIUM = navigator.userAgent.includes('Chrome');
+  function wantedRate() { return Math.min(8, parseFloat($('rate').value) || 1); }
+  function encodeSpeed(u, v) {
+    const want = wantedRate();
+    if (!(v && PIPER_NAME.test(v.name || ''))) { u.rate = want; return; }
+    const base = Math.min(want, 2.5);
+    const extra = want / base;
+    // spd values Firefox would send for base and extra
+    const spdRate = base >= 1 ? 100 * Math.log(base) / Math.log(2.5)
+                              : -100 * Math.log(base) / Math.log(0.5);
+    const spdPitch = 100 * Math.log(extra) / Math.log(4);
+    if (IS_CHROMIUM) {
+      // chromium: spd_rate = 100*log3(rate), spd_pitch = 100*log3(pitch)
+      u.rate = Math.pow(3, spdRate / 100);
+      u.pitch = Math.pow(3, spdPitch / 100);
+    } else {
+      // firefox: spd_rate = 100*log2.5(rate), spd_pitch = (pitch-1)*100
+      u.rate = base;
+      u.pitch = 1 + spdPitch / 100;
+    }
+  }
   function batchEnd(si) {
     // Group consecutive sentences of one paragraph into a single utterance of
     // roughly ~10s of audio at the current rate. Per-utterance engine startup
     // gaps are fixed-cost, so short sentence-sized utterances make high rates
     // feel much slower than advertised.
-    const rate = Math.min(4, parseFloat($('rate').value) || 1);
+    const rate = wantedRate();
     const budget = Math.max(24, Math.round(rate * 10 / SPW));
     const p = sentences[si].para;
     let sj = si, words = sentences[si].len;
@@ -352,7 +385,7 @@
     const u = new SpeechSynthesisUtterance(text);
     const v = pickVoice();
     if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = Math.min(4, parseFloat($('rate').value) || 1);
+    encodeSpeed(u, v);
     let settled = false;
 
     setWord(W0);
