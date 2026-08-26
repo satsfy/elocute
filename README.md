@@ -1,8 +1,8 @@
-# Loudreader
+# Elocute
 
 Listen to audiobooks as your browser read them.
 
-Upload a PDF, EPUB, Markdown or TXT. Loudreader extracts and
+Upload a PDF, EPUB, Markdown or TXT. Elocute extracts and
 cleans the text, and then **your browser's TTS reads it** with live word highlighting, audiobook-style player. You can optionally sign up to save the books you uploaded across sessions and devices, with automatic progress saving.
 
 
@@ -13,7 +13,7 @@ cp .env.example .env          # set DATABASE_URL + SECRET_KEY
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn backend.main:app --reload
 # or
-docker build -t loudreader . && docker run --env-file .env -p 8000:8000 loudreader
+docker build -t elocute . && docker run --env-file .env -p 8000:8000 elocute
 ```
 
 The app creates its own tables on startup; the Postgres *database* must exist.

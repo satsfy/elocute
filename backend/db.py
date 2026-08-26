@@ -13,7 +13,7 @@ import logging
 import os
 from contextlib import contextmanager
 
-log = logging.getLogger("loudreader.db")
+log = logging.getLogger("elocute.db")
 
 _pool = None
 

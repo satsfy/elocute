@@ -1,6 +1,6 @@
-"""Loudreader: Listen to audiobooks as your browser read them.
+"""Elocute: Listen to audiobooks as your browser read them.
 
-Upload a PDF, EPUB, Markdown or TXT. Loudreader extracts and cleans the text,
+Upload a PDF, EPUB, Markdown or TXT. Elocute extracts and cleans the text,
 and then **your browser's TTS reads it** with live word highlighting,
 audiobook-style player. Each book is stored as one continuous text; positions
 and chapters are global word offsets. You can optionally signup to save the
@@ -25,16 +25,16 @@ from starlette.middleware.sessions import SessionMiddleware
 from backend import auth, bookprep, db
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("loudreader")
+log = logging.getLogger("elocute")
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 MAX_UPLOAD = 80 * 1024 * 1024
 STORAGE_CAP = 5 * 1024**3  # total text+cover bytes across all users except the owner
 OWNER_EMAIL = os.environ.get("OWNER_EMAIL", "renatobritto@protonmail.com")
-BASE_URL = os.environ.get("BASE_URL", "https://loudreader.satsfy.xyz")
+BASE_URL = os.environ.get("BASE_URL", "https://elocute.satsfy.xyz")
 _ID_RE = re.compile(r"^[0-9a-f-]{32,36}$")
 
-app = FastAPI(title="Loudreader", docs_url=None, redoc_url=None)
+app = FastAPI(title="Elocute", docs_url=None, redoc_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=2048)  # book text is MBs of very compressible prose
 app.add_middleware(
     SessionMiddleware,
@@ -115,7 +115,7 @@ def sitemap_xml():
 def llms_txt():
     """Plain-language summary for AI crawlers/assistants (llms.txt convention)."""
     return PlainTextResponse(
-        "# Loudreader\n"
+        "# Elocute\n"
         "\n"
         "> Free browser text-to-speech audiobook reader. Upload a PDF, EPUB,\n"
         "> Markdown or TXT (or paste text) and your browser reads it aloud with\n"
@@ -131,7 +131,7 @@ def llms_txt():
         "  server stores only extracted text, never audio\n"
         "- Voice quality depends on the browser: Edge and Android ship the best\n"
         "  free voices, Chrome desktop is decent, Linux browsers use espeak\n"
-        "- Source code: https://github.com/satsfy/loudreader\n"
+        "- Source code: https://github.com/satsfy/elocute\n"
     )
 
 
